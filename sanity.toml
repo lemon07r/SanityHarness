@@ -1,0 +1,14 @@
+# SanityHarness Configuration
+# See: https://github.com/lemon07r/sanityharness
+
+[harness]
+session_dir = "./sessions"
+default_timeout = 30        # seconds per task
+max_attempts = 5            # maximum attempts in watch mode
+output_format = "all"       # json, human, or all
+
+[docker]
+go_image = "ghcr.io/lemon07r/sanity-go:latest"
+rust_image = "ghcr.io/lemon07r/sanity-rust:latest"
+typescript_image = "ghcr.io/lemon07r/sanity-ts:latest"
+auto_pull = true            # automatically pull images if missing

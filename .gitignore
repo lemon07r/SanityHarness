@@ -1,0 +1,68 @@
+# Binaries
+sanity
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Session output (generated during runs)
+sessions/
+
+# Workspace directories (created by sanity init)
+# These are task workspaces created for agents
+bank-account/
+dining-philosophers/
+parallel-letter-frequency/
+react/
+circular-buffer/
+doubly-linked-list/
+macros/
+forth/
+
+# Pampax semantic search index
+.pampa/
+pampa.codemap.json
+
+# Docker build cache
+.docker/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
