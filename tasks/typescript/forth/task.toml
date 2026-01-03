@@ -1,0 +1,15 @@
+slug = "forth"
+name = "Forth"
+language = "typescript"
+difficulty = "hard"
+description = "Implement a Forth-like stack-based language interpreter"
+
+[files]
+stub = ["forth.ts"]
+test = ["forth.test.ts"]
+hidden_test = ["forth.hidden.test.ts"]
+support = []
+
+[validation]
+command = "npx"
+args = ["tsx", "--test", "forth.test.ts"]

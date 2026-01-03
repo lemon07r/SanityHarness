@@ -1,0 +1,15 @@
+slug = "generational-arena"
+name = "Generational Arena"
+language = "rust"
+difficulty = "hard"
+description = "Implement an arena allocator with generational handles to prevent use-after-free"
+
+[files]
+stub = ["lib.rs"]
+test = ["tests.rs"]
+hidden_test = ["tests/hidden.rs"]
+support = ["Cargo.toml"]
+
+[validation]
+command = "cargo"
+args = ["test"]

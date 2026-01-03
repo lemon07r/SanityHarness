@@ -35,7 +35,7 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	// Add the directory
 	if err := watcher.Add(w.dir); err != nil {
@@ -106,11 +106,7 @@ func (w *Watcher) isRelevantEvent(event fsnotify.Event) bool {
 		".tmp": true, ".bak": true,
 		".log": true,
 	}
-	if ignoredExts[ext] {
-		return false
-	}
-
-	return true
+	return !ignoredExts[ext]
 }
 
 // addSubdirs recursively adds subdirectories to the watcher.

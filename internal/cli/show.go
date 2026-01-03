@@ -68,7 +68,7 @@ func displaySession(session *result.Session, path string) error {
 	fmt.Println()
 
 	fmt.Printf(" Status:    %s %s\n", statusEmoji[session.Status], strings.ToUpper(string(session.Status)))
-	fmt.Printf(" Task:      %s (%s)\n", session.TaskSlug, session.Language)
+	fmt.Printf(" Task:      %s/%s\n", session.Language, session.TaskSlug)
 	fmt.Printf(" Attempts:  %d\n", len(session.Attempts))
 	fmt.Printf(" Duration:  %s\n", session.TotalTime.Round(1e6)) // Round to milliseconds
 	fmt.Printf(" Started:   %s\n", session.StartedAt.Format("2006-01-02 15:04:05"))

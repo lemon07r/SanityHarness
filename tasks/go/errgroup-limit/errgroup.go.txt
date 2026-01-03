@@ -1,0 +1,29 @@
+// Package errgroup provides a bounded-concurrency task group.
+package errgroup
+
+// Group runs functions with a maximum concurrency limit.
+//
+// Once any function returns a non-nil error, the group stops scheduling new
+// functions (already running ones may still complete).
+type Group struct {
+	// TODO: Add fields.
+}
+
+// New creates a new Group with the given max concurrency.
+// If limit <= 0, it should behave as if limit == 1.
+func New(limit int) *Group {
+	panic("Please implement New")
+}
+
+// Go schedules fn to run.
+// It must return quickly; fn should run asynchronously under the group's
+// concurrency limit.
+func (g *Group) Go(fn func() error) {
+	panic("Please implement Go")
+}
+
+// Wait blocks until all started functions finish and returns the first error.
+// If no function returns an error, it returns nil.
+func (g *Group) Wait() error {
+	panic("Please implement Wait")
+}

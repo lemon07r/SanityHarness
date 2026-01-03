@@ -27,7 +27,7 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		var taskList []*task.Task
 		if listLanguage != "" {
@@ -72,15 +72,15 @@ func outputTable(taskList []*task.Task) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SLUG\tLANGUAGE\tDIFFICULTY\tDESCRIPTION")
-	fmt.Fprintln(w, "----\t--------\t----------\t-----------")
+	_, _ = fmt.Fprintln(w, "ID\tLANGUAGE\tDIFFICULTY\tDESCRIPTION")
+	_, _ = fmt.Fprintln(w, "--\t--------\t----------\t-----------")
 
 	for _, t := range taskList {
 		desc := t.Description
 		if len(desc) > 50 {
 			desc = desc[:47] + "..."
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.Slug, t.Language, t.Difficulty, desc)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID(), t.Language, t.Difficulty, desc)
 	}
 
 	return w.Flush()

@@ -1,0 +1,279 @@
+package account
+
+import (
+	"sync"
+	"testing"
+)
+
+func TestOpen(t *testing.T) {
+	// Opening with a positive amount should succeed
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil, want non-nil *Account")
+	}
+
+	b, ok := a.Balance()
+	if !ok {
+		t.Fatal("Balance() ok = false, want true")
+	}
+	if b != 100 {
+		t.Fatalf("Balance() = %d, want 100", b)
+	}
+}
+
+func TestOpenNegative(t *testing.T) {
+	a := Open(-100)
+	if a != nil {
+		t.Fatal("Open(-100) = non-nil, want nil")
+	}
+}
+
+func TestOpenZero(t *testing.T) {
+	a := Open(0)
+	if a == nil {
+		t.Fatal("Open(0) = nil, want non-nil *Account")
+	}
+
+	b, ok := a.Balance()
+	if !ok {
+		t.Fatal("Balance() ok = false, want true")
+	}
+	if b != 0 {
+		t.Fatalf("Balance() = %d, want 0", b)
+	}
+}
+
+func TestDeposit(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	b, ok := a.Deposit(50)
+	if !ok {
+		t.Fatal("Deposit(50) ok = false, want true")
+	}
+	if b != 150 {
+		t.Fatalf("Deposit(50) balance = %d, want 150", b)
+	}
+}
+
+func TestWithdraw(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	b, ok := a.Deposit(-50)
+	if !ok {
+		t.Fatal("Deposit(-50) ok = false, want true")
+	}
+	if b != 50 {
+		t.Fatalf("Deposit(-50) balance = %d, want 50", b)
+	}
+}
+
+func TestOverdraw(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	_, ok := a.Deposit(-150)
+	if ok {
+		t.Fatal("Deposit(-150) ok = true, want false (overdraw)")
+	}
+
+	// Balance should be unchanged
+	b, _ := a.Balance()
+	if b != 100 {
+		t.Fatalf("Balance after failed overdraw = %d, want 100", b)
+	}
+}
+
+func TestClose(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	payout, ok := a.Close()
+	if !ok {
+		t.Fatal("Close() ok = false, want true")
+	}
+	if payout != 100 {
+		t.Fatalf("Close() payout = %d, want 100", payout)
+	}
+}
+
+func TestCloseTwice(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	_, ok := a.Close()
+	if !ok {
+		t.Fatal("First Close() ok = false")
+	}
+
+	_, ok = a.Close()
+	if ok {
+		t.Fatal("Second Close() ok = true, want false")
+	}
+}
+
+func TestBalanceAfterClose(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	a.Close()
+
+	_, ok := a.Balance()
+	if ok {
+		t.Fatal("Balance() on closed account ok = true, want false")
+	}
+}
+
+func TestDepositAfterClose(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	a.Close()
+
+	_, ok := a.Deposit(50)
+	if ok {
+		t.Fatal("Deposit() on closed account ok = true, want false")
+	}
+}
+
+// Concurrency tests - these are the critical tests for this exercise
+
+func TestConcurrentDeposit(t *testing.T) {
+	a := Open(0)
+	if a == nil {
+		t.Fatal("Open(0) = nil")
+	}
+
+	const n = 1000
+	var wg sync.WaitGroup
+	wg.Add(n)
+
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			a.Deposit(1)
+		}()
+	}
+
+	wg.Wait()
+
+	b, ok := a.Balance()
+	if !ok {
+		t.Fatal("Balance() ok = false")
+	}
+	if b != n {
+		t.Fatalf("Balance() = %d, want %d (concurrent deposits lost)", b, n)
+	}
+}
+
+func TestConcurrentWithdraw(t *testing.T) {
+	a := Open(1000)
+	if a == nil {
+		t.Fatal("Open(1000) = nil")
+	}
+
+	const n = 100
+	var wg sync.WaitGroup
+	var successCount int64
+	var mu sync.Mutex
+
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, ok := a.Deposit(-10)
+			if ok {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	b, _ := a.Balance()
+	expectedBalance := 1000 - (successCount * 10)
+	if b != expectedBalance {
+		t.Fatalf("Balance() = %d, want %d", b, expectedBalance)
+	}
+}
+
+func TestConcurrentBalanceAndDeposit(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	const n = 500
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+
+	// Half readers, half writers
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			a.Balance()
+		}()
+		go func() {
+			defer wg.Done()
+			a.Deposit(1)
+		}()
+	}
+
+	wg.Wait()
+
+	b, ok := a.Balance()
+	if !ok {
+		t.Fatal("Balance() ok = false")
+	}
+	if b != 100+n {
+		t.Fatalf("Balance() = %d, want %d", b, 100+n)
+	}
+}
+
+func TestConcurrentClose(t *testing.T) {
+	a := Open(100)
+	if a == nil {
+		t.Fatal("Open(100) = nil")
+	}
+
+	const n = 100
+	var wg sync.WaitGroup
+	var successCount int
+	var mu sync.Mutex
+
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, ok := a.Close()
+			if ok {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if successCount != 1 {
+		t.Fatalf("Close() succeeded %d times, want exactly 1", successCount)
+	}
+}

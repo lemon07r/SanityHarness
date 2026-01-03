@@ -1,0 +1,104 @@
+package letter
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestFrequency(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected FreqMap
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: FreqMap{},
+		},
+		{
+			name:     "single letter",
+			input:    "a",
+			expected: FreqMap{'a': 1},
+		},
+		{
+			name:  "repeated letters",
+			input: "aaa",
+			expected: FreqMap{'a': 3},
+		},
+		{
+			name:  "mixed case",
+			input: "aAaA",
+			expected: FreqMap{'a': 2, 'A': 2},
+		},
+		{
+			name:  "ignores non-letters",
+			input: "a1b2c3",
+			expected: FreqMap{'a': 1, 'b': 1, 'c': 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Frequency(tt.input)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("Frequency(%q) = %v, want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConcurrentFrequency(t *testing.T) {
+	tests := []struct {
+		name     string
+		inputs   []string
+		expected FreqMap
+	}{
+		{
+			name:     "empty slice",
+			inputs:   []string{},
+			expected: FreqMap{},
+		},
+		{
+			name:     "single text",
+			inputs:   []string{"abc"},
+			expected: FreqMap{'a': 1, 'b': 1, 'c': 1},
+		},
+		{
+			name:     "multiple texts",
+			inputs:   []string{"abc", "abc", "abc"},
+			expected: FreqMap{'a': 3, 'b': 3, 'c': 3},
+		},
+		{
+			name:     "different texts",
+			inputs:   []string{"aaa", "bbb", "ccc"},
+			expected: FreqMap{'a': 3, 'b': 3, 'c': 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ConcurrentFrequency(tt.inputs)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("ConcurrentFrequency(%v) = %v, want %v", tt.inputs, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConcurrentFrequencyIsActuallyConcurrent(t *testing.T) {
+	// Create many texts to ensure concurrency is beneficial
+	texts := make([]string, 1000)
+	for i := range texts {
+		texts[i] = "abcdefghijklmnopqrstuvwxyz"
+	}
+
+	result := ConcurrentFrequency(texts)
+	
+	// Each letter appears once per text
+	for _, r := range "abcdefghijklmnopqrstuvwxyz" {
+		if result[r] != 1000 {
+			t.Errorf("ConcurrentFrequency: letter %c has count %d, want 1000", r, result[r])
+		}
+	}
+}

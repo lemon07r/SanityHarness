@@ -1,0 +1,14 @@
+slug = "parallel-letter-frequency"
+name = "Parallel Letter Frequency"
+language = "rust"
+difficulty = "hard"
+description = "Count letter frequencies using multiple threads with proper synchronization"
+
+[files]
+stub = ["lib.rs"]
+test = ["tests.rs"]
+support = ["Cargo.toml"]
+
+[validation]
+command = "cargo"
+args = ["test"]

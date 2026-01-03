@@ -1,0 +1,133 @@
+package dining
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestBasicDining(t *testing.T) {
+	names := []string{"Aristotle", "Kant", "Spinoza", "Marx", "Russell"}
+	table := NewTable(names)
+
+	if table == nil {
+		t.Fatal("NewTable returned nil")
+	}
+
+	if len(table.Philosophers) != 5 {
+		t.Fatalf("Expected 5 philosophers, got %d", len(table.Philosophers))
+	}
+
+	if len(table.Forks) != 5 {
+		t.Fatalf("Expected 5 forks, got %d", len(table.Forks))
+	}
+}
+
+func TestDiningCompletes(t *testing.T) {
+	names := []string{"Aristotle", "Kant", "Spinoza", "Marx", "Russell"}
+	table := NewTable(names)
+
+	done := make(chan struct{})
+	go func() {
+		table.Dine(3)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("Dining did not complete within 10 seconds - possible deadlock")
+	}
+}
+
+func TestAllowsConcurrentEating(t *testing.T) {
+	// This test ensures the solution isn't trivially serialized.
+	names := []string{"A", "B", "C", "D", "E"}
+	table := NewTable(names)
+
+	currentEating.Store(0)
+	maxEating.Store(0)
+
+	done := make(chan struct{})
+	go func() {
+		table.Dine(5)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if got := maxEating.Load(); got < 2 {
+			t.Fatalf("expected at least 2 philosophers to eat concurrently, got %d", got)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Dining did not complete - possible deadlock")
+	}
+}
+
+func TestManyPhilosophers(t *testing.T) {
+	names := make([]string, 20)
+	for i := range names {
+		names[i] = string(rune('A' + i))
+	}
+
+	table := NewTable(names)
+
+	done := make(chan struct{})
+	go func() {
+		table.Dine(10)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(30 * time.Second):
+		t.Fatal("Dining with 20 philosophers did not complete - possible deadlock")
+	}
+}
+
+func TestTwoPhilosophers(t *testing.T) {
+	names := []string{"Plato", "Socrates"}
+	table := NewTable(names)
+
+	done := make(chan struct{})
+	go func() {
+		table.Dine(10)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("Dining with 2 philosophers did not complete - possible deadlock")
+	}
+}
+
+func TestConcurrentDiningSessions(t *testing.T) {
+	var wg sync.WaitGroup
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			names := []string{"A", "B", "C", "D", "E"}
+			table := NewTable(names)
+			table.Dine(3)
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(30 * time.Second):
+		t.Fatal("Concurrent dining sessions did not complete")
+	}
+}

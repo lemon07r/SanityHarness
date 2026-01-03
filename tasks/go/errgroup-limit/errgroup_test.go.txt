@@ -1,0 +1,122 @@
+package errgroup
+
+import (
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestRespectsConcurrencyLimit(t *testing.T) {
+	g := New(2)
+
+	started := make(chan struct{}, 10)
+	block := make(chan struct{})
+
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+
+	for i := 0; i < 5; i++ {
+		g.Go(func() error {
+			n := inFlight.Add(1)
+			for {
+				old := maxInFlight.Load()
+				if n <= old || maxInFlight.CompareAndSwap(old, n) {
+					break
+				}
+			}
+			started <- struct{}{}
+			<-block
+			inFlight.Add(-1)
+			return nil
+		})
+	}
+
+	// Expect exactly two tasks to start before we unblock.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a task to start")
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a second task to start")
+	}
+	select {
+	case <-started:
+		t.Fatal("started more tasks than the limit")
+	case <-time.After(100 * time.Millisecond):
+		// OK
+	}
+
+	if got := maxInFlight.Load(); got != 2 {
+		t.Fatalf("max in-flight = %d, want 2", got)
+	}
+
+	close(block)
+	if err := g.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v, want nil", err)
+	}
+}
+
+func TestStopsSchedulingAfterFirstError(t *testing.T) {
+	g := New(2)
+
+	started := make(chan int, 10)
+	block := make(chan struct{})
+
+	wantErr := errors.New("boom")
+
+	// Task 0: blocks so the group has one long-running task.
+	g.Go(func() error {
+		started <- 0
+		<-block
+		return nil
+	})
+
+	// Task 1: returns an error immediately.
+	g.Go(func() error {
+		started <- 1
+		return wantErr
+	})
+
+	// Task 2: should never be started.
+	g.Go(func() error {
+		started <- 2
+		return nil
+	})
+
+	// Ensure tasks 0 and 1 started.
+	seen0, seen1 := false, false
+	deadline := time.After(2 * time.Second)
+	for !(seen0 && seen1) {
+		select {
+		case id := <-started:
+			if id == 0 {
+				seen0 = true
+			}
+			if id == 1 {
+				seen1 = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for initial tasks to start (seen0=%v, seen1=%v)", seen0, seen1)
+		}
+	}
+
+	// Give the group a moment to (incorrectly) start task 2.
+	select {
+	case id := <-started:
+		if id == 2 {
+			t.Fatal("started a new task after error")
+		}
+	case <-time.After(200 * time.Millisecond):
+		// OK
+	}
+
+	close(block)
+	err := g.Wait()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Wait() error = %v, want %v", err, wantErr)
+	}
+}

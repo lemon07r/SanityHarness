@@ -1,0 +1,15 @@
+slug = "promise-pool"
+name = "Promise Pool"
+language = "typescript"
+difficulty = "hard"
+description = "Run promise-returning tasks with a concurrency limit while preserving result order"
+
+[files]
+stub = ["promise_pool.ts"]
+test = ["promise_pool.test.ts"]
+hidden_test = ["promise_pool.hidden.test.ts"]
+support = []
+
+[validation]
+command = "npx"
+args = ["tsx", "--test", "promise_pool.test.ts"]

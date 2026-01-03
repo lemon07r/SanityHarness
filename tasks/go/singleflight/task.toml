@@ -1,0 +1,15 @@
+slug = "singleflight"
+name = "Singleflight"
+language = "go"
+difficulty = "expert"
+description = "Deduplicate concurrent calls by key so only one execution is in-flight per key"
+
+[files]
+stub = ["singleflight.go.txt"]
+test = ["singleflight_test.go.txt"]
+hidden_test = ["singleflight_hidden_test.go.txt"]
+support = ["go.mod.txt"]
+
+[validation]
+command = "go"
+args = ["test", "-race", "-v", "-timeout", "30s", "./..."]

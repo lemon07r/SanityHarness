@@ -1,0 +1,15 @@
+slug = "glob"
+name = "Glob Matcher"
+language = "typescript"
+difficulty = "hard"
+description = "Match strings against glob patterns supporting '*', '?', and escaping"
+
+[files]
+stub = ["glob.ts"]
+test = ["glob.test.ts"]
+hidden_test = ["glob.hidden.test.ts"]
+support = []
+
+[validation]
+command = "npx"
+args = ["tsx", "--test", "glob.test.ts"]

@@ -1,0 +1,14 @@
+slug = "circular-buffer"
+name = "Circular Buffer"
+language = "rust"
+difficulty = "hard"
+description = "Implement a circular buffer with ownership transfer semantics"
+
+[files]
+stub = ["lib.rs"]
+test = ["tests.rs"]
+support = ["Cargo.toml"]
+
+[validation]
+command = "cargo"
+args = ["test"]

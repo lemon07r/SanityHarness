@@ -1,0 +1,14 @@
+slug = "parallel-letter-frequency"
+name = "Parallel Letter Frequency"
+language = "go"
+difficulty = "hard"
+description = "Count letter frequencies using goroutines and channels"
+
+[files]
+stub = ["parallel_letter_frequency.go.txt"]
+test = ["parallel_letter_frequency_test.go.txt"]
+support = ["go.mod.txt"]
+
+[validation]
+command = "go"
+args = ["test", "-race", "-v", "./..."]

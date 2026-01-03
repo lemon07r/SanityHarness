@@ -1,0 +1,12 @@
+[package]
+name = "regex_lite"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "tests"
+path = "tests.rs"
+
+[lib]
+name = "regex_lite"
+path = "lib.rs"

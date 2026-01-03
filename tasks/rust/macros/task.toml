@@ -1,0 +1,15 @@
+slug = "macros"
+name = "Macros"
+language = "rust"
+difficulty = "hard"
+description = "Create Rust declarative macros for common patterns"
+
+[files]
+stub = ["lib.rs"]
+test = ["tests.rs"]
+hidden_test = ["tests/hidden.rs"]
+support = ["Cargo.toml"]
+
+[validation]
+command = "cargo"
+args = ["test"]

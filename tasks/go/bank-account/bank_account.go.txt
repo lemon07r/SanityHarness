@@ -1,0 +1,33 @@
+// Package account implements a thread-safe bank account.
+package account
+
+// Account represents a bank account.
+type Account struct {
+	// TODO: Add fields for balance and synchronization
+}
+
+// Open creates a new account with the given initial deposit.
+// Returns nil if the initial deposit is negative.
+func Open(amount int64) *Account {
+	panic("Please implement the Open function")
+}
+
+// Balance returns the current balance and whether the account is open.
+func (a *Account) Balance() (int64, bool) {
+	panic("Please implement the Balance method")
+}
+
+// Deposit adds (or removes if negative) amount to the balance.
+// Returns the new balance and success status.
+// Deposits/withdrawals on closed accounts fail.
+// Withdrawals that would result in negative balance fail.
+func (a *Account) Deposit(amount int64) (int64, bool) {
+	panic("Please implement the Deposit method")
+}
+
+// Close closes the account and returns the final balance.
+// Returns the payout and success status.
+// Closing an already closed account fails.
+func (a *Account) Close() (int64, bool) {
+	panic("Please implement the Close method")
+}

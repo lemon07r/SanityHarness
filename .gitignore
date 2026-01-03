@@ -6,12 +6,16 @@ sanity
 *.so
 *.dylib
 
+# Cross-compiled binaries (make build-all)
+bin/
+
 # Test binary, built with `go test -c`
 *.test
 
 # Output of the go coverage tool
 *.out
 coverage.html
+coverage/
 
 # Go workspace file
 go.work
@@ -31,16 +35,29 @@ vendor/
 # Session output (generated during runs)
 sessions/
 
+# Eval output (generated during sanity eval)
+eval-results/
+
 # Workspace directories (created by sanity init)
 # These are task workspaces created for agents
-bank-account/
-dining-philosophers/
-parallel-letter-frequency/
-react/
-circular-buffer/
-doubly-linked-list/
-macros/
-forth/
+/go-*/
+/rust-*/
+/typescript-*/
+
+/bank-account/
+/dining-philosophers/
+/parallel-letter-frequency/
+/react/
+/circular-buffer/
+/doubly-linked-list/
+/macros/
+/forth/
+/singleflight/
+/errgroup-limit/
+/generational-arena/
+/regex-lite/
+/promise-pool/
+/glob/
 
 # Pampax semantic search index
 .pampa/

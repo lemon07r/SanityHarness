@@ -1,0 +1,15 @@
+slug = "react"
+name = "React (Reactive Cells)"
+language = "typescript"
+difficulty = "hard"
+description = "Implement reactive spreadsheet-like cells with dependencies and callbacks"
+
+[files]
+stub = ["react.ts"]
+test = ["react.test.ts"]
+hidden_test = ["react.hidden.test.ts"]
+support = []
+
+[validation]
+command = "npx"
+args = ["tsx", "--test", "react.test.ts"]

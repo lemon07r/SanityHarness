@@ -1,0 +1,14 @@
+slug = "doubly-linked-list"
+name = "Doubly Linked List"
+language = "rust"
+difficulty = "expert"
+description = "Implement a doubly linked list using unsafe Rust and raw pointers"
+
+[files]
+stub = ["lib.rs"]
+test = ["tests.rs"]
+support = ["Cargo.toml"]
+
+[validation]
+command = "cargo"
+args = ["test"]

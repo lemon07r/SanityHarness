@@ -1,0 +1,76 @@
+// Package dining implements the dining philosophers problem.
+package dining
+
+import (
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+var (
+	currentEating atomic.Int32
+	maxEating     atomic.Int32
+)
+
+// Philosopher represents a dining philosopher.
+type Philosopher struct {
+	// TODO: Add necessary fields
+	Name string
+}
+
+// Fork represents a fork on the table.
+type Fork struct {
+	// TODO: Add necessary fields (hint: sync.Mutex)
+}
+
+// Table represents the dining table with philosophers and forks.
+type Table struct {
+	// TODO: Add necessary fields
+	Philosophers []*Philosopher
+	Forks        []*Fork
+}
+
+// NewTable creates a new dining table with n philosophers.
+func NewTable(names []string) *Table {
+	panic("Please implement NewTable")
+}
+
+// Dine starts the dining simulation.
+// Each philosopher should eat 'rounds' times.
+// The function should return only after all philosophers have finished.
+// IMPORTANT: Must not deadlock!
+func (t *Table) Dine(rounds int) {
+	panic("Please implement Dine")
+}
+
+// pickUpForks is called when a philosopher wants to start eating.
+// Must acquire both forks before returning.
+func (p *Philosopher) pickUpForks(left, right *Fork) {
+	panic("Please implement pickUpForks")
+}
+
+// putDownForks is called when a philosopher is done eating.
+func (p *Philosopher) putDownForks(left, right *Fork) {
+	panic("Please implement putDownForks")
+}
+
+// eat simulates eating. Call this between pickUpForks and putDownForks.
+func (p *Philosopher) eat() {
+	n := currentEating.Add(1)
+	for {
+		old := maxEating.Load()
+		if n <= old || maxEating.CompareAndSwap(old, n) {
+			break
+		}
+	}
+
+	// Simulates eating.
+	time.Sleep(2 * time.Millisecond)
+	currentEating.Add(-1)
+}
+
+// think simulates thinking. Call this between rounds.
+func (p *Philosopher) think() {
+	// Simulates thinking.
+	time.Sleep(1 * time.Millisecond)
+}

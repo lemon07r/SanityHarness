@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lemon07r/sanityharness/internal/runner"
+	"github.com/lemon07r/sanityharness/internal/task"
 	"github.com/lemon07r/sanityharness/tasks"
 )
 
@@ -21,28 +22,37 @@ Example:
   sanity init bank-account -o ./my-workspace`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		taskSlug := args[0]
+		taskRef := args[0]
 
 		r, err := runner.NewRunner(cfg, tasks.FS, tasksDir, logger)
 		if err != nil {
 			return err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
-		if err := r.InitWorkspace(taskSlug, initOutput); err != nil {
+		t, err := r.ResolveTaskRef(taskRef)
+		if err != nil {
 			return err
 		}
 
 		outputDir := initOutput
 		if outputDir == "" {
-			outputDir = taskSlug
+			if _, _, ok := task.ParseTaskID(taskRef); ok {
+				outputDir = fmt.Sprintf("%s-%s", t.Language, t.Slug)
+			} else {
+				outputDir = t.Slug
+			}
 		}
 
-		fmt.Printf("Initialized workspace for %s in ./%s\n", taskSlug, outputDir)
+		if err := r.InitWorkspaceForTask(t, outputDir); err != nil {
+			return err
+		}
+
+		fmt.Printf("Initialized workspace for %s in %s\n", t.ID(), outputDir)
 		fmt.Println("\nNext steps:")
-		fmt.Printf("  1. Implement the solution in ./%s\n", outputDir)
-		fmt.Printf("  2. Run: sanity run %s\n", taskSlug)
-		fmt.Printf("     Or with watch mode: sanity run %s --watch\n", taskSlug)
+		fmt.Printf("  1. Implement the solution in %s\n", outputDir)
+		fmt.Printf("  2. Run: sanity run %s\n", t.ID())
+		fmt.Printf("     Or with watch mode: sanity run %s --watch\n", t.ID())
 
 		return nil
 	},

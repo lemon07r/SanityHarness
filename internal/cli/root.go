@@ -80,7 +80,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
-// Version information (set by build flags)
+// Version information (set by build flags).
 var (
 	Version   = "dev"
 	Commit    = "unknown"

@@ -1,0 +1,255 @@
+# =============================================================================
+# golangci-lint configuration for SanityHarness
+# =============================================================================
+# Modern Go linting configuration optimized for a CLI tool with:
+# - Docker SDK integration
+# - Context-based I/O operations
+# - Structured logging (log/slog)
+# - Cobra CLI framework
+#
+# Run: make lint
+# Docs: https://golangci-lint.run/usage/configuration/
+# =============================================================================
+
+version: "2"
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+  
+  # Include test files in linting
+  tests: true
+  
+  # Build tags to include
+  build-tags: []
+
+linters:
+  # Start with a curated set of useful linters rather than enable-all
+  # This avoids overly noisy linters while catching real issues
+  default: none
+  enable:
+    # ==========================================================================
+    # Core / Essential Linters
+    # ==========================================================================
+    - errcheck          # Check for unchecked errors
+    - govet             # Go's built-in linter (vet)
+    - staticcheck       # Comprehensive static analysis (successor to megacheck)
+    - unused            # Detect unused code
+    - ineffassign       # Detect ineffective assignments
+    
+    # ==========================================================================
+    # Error Handling (critical for Docker/I/O operations)
+    # ==========================================================================
+    - errorlint         # Find issues with error wrapping (Go 1.13+ errors)
+    
+    # ==========================================================================
+    # Bug Detection
+    # ==========================================================================
+    - bodyclose         # HTTP response body must be closed (Docker SDK uses HTTP)
+    - durationcheck     # Detect incorrect duration math
+    - noctx             # Detect HTTP requests without context
+    - sqlclosecheck     # SQL rows/statements must be closed
+    - rowserrcheck      # Detect unchecked sql.Rows.Err()
+    
+    # ==========================================================================
+    # Code Quality / Style
+    # ==========================================================================
+    - gocritic          # Comprehensive code review suggestions
+    - unconvert         # Detect unnecessary type conversions
+    - prealloc          # Suggest slice preallocation for performance
+    
+    # ==========================================================================
+    # Naming & Documentation
+    # ==========================================================================
+    - misspell          # Detect spelling mistakes in comments/strings
+    - godot             # Check that comments end with a period
+    - predeclared       # Detect shadowing of predeclared identifiers
+    
+    # ==========================================================================
+    # Security
+    # ==========================================================================
+    # gosec disabled - too many false positives for CLI tool file operations
+    # - gosec
+    
+    # ==========================================================================
+    # Performance
+    # ==========================================================================
+    - copyloopvar       # Detect loop variable copies (Go 1.22+)
+    - intrange          # Suggest integer range loops (Go 1.22+)
+    
+    # ==========================================================================
+    # Complexity (reasonable thresholds)
+    # ==========================================================================
+    - gocyclo           # Cyclomatic complexity
+    - gocognit          # Cognitive complexity
+    - nestif            # Detect deeply nested if statements
+    - maintidx          # Maintainability index
+    
+    # ==========================================================================
+    # Context Usage (important for this project)
+    # ==========================================================================
+    # - contextcheck    # Disabled: too noisy for defer cleanup patterns
+    
+    # ==========================================================================
+    # Struct/Type Checks
+    # ==========================================================================
+    - tagalign          # Check struct tag alignment
+
+linters-settings:
+  # ---------------------------------------------------------------------------
+  # Error Checking
+  # ---------------------------------------------------------------------------
+  errcheck:
+    # Check for unchecked type assertions
+    check-type-assertions: true
+    # Don't report on ignored blank assignments (we use _ intentionally in defers)
+    check-blank: false
+    # Exclude common intentionally-ignored functions
+    exclude-functions:
+      - io.Copy
+      - io/ioutil.ReadFile
+      - (io.Closer).Close
+      - (*os.File).Close
+      - (net/http.ResponseWriter).Write
+
+  errorlint:
+    # Check for errors.Is instead of ==
+    comparison: true
+    # Check for errors.As instead of type assertions
+    asserts: true
+    # Check for fmt.Errorf with %w
+    errorf: true
+    # Allow comparison against sentinel errors from stdlib
+    errorf-multi: true
+
+  # ---------------------------------------------------------------------------
+  # Code Quality
+  # ---------------------------------------------------------------------------
+  gocritic:
+    # Enable useful check categories
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+      - opinionated
+    disabled-checks:
+      # These are too noisy for reasonable code
+      - hugeParam          # We pass some large structs intentionally
+      - rangeExprCopy      # Not always a problem
+      - rangeValCopy       # Not always a problem
+      - whyNoLint          # We'll add reasons when needed
+
+  govet:
+    # Enable all analyzers
+    enable-all: true
+    disable:
+      - fieldalignment     # Too strict, wastes dev time for minimal gains
+
+  # ---------------------------------------------------------------------------
+  # Complexity Thresholds
+  # ---------------------------------------------------------------------------
+  gocyclo:
+    # Max cyclomatic complexity
+    min-complexity: 20
+
+  gocognit:
+    # Max cognitive complexity
+    min-complexity: 25
+
+  nestif:
+    # Max nesting depth for if statements
+    min-complexity: 5
+
+  maintidx:
+    # Min maintainability index (20-100, higher is better)
+    under: 20
+
+  # ---------------------------------------------------------------------------
+  # Documentation
+  # ---------------------------------------------------------------------------
+  godot:
+    # Require periods at end of comments
+    scope: declarations
+    # Check top-level declarations only
+    period: true
+    capital: false
+
+  misspell:
+    locale: US
+
+  # ---------------------------------------------------------------------------
+  # Formatting
+  # ---------------------------------------------------------------------------
+  gofmt:
+    # Apply gofmt simplification (-s)
+    simplify: true
+
+  tagalign:
+    # Align struct tags
+    align: true
+    sort: false
+    order:
+      - json
+      - toml
+      - yaml
+      - xml
+
+  # ---------------------------------------------------------------------------
+  # Performance
+  # ---------------------------------------------------------------------------
+  prealloc:
+    # Only suggest prealloc for simple loops
+    simple: true
+    # Include range loops
+    range-loops: true
+    # Include for loops
+    for-loops: true
+
+issues:
+  # Maximum issues to report (0 = unlimited)
+  max-issues-per-linter: 50
+  max-same-issues: 10
+  
+  # Show all issues from a linter if less than max
+  uniq-by-line: true
+
+  # Exclude common patterns
+  exclude-rules:
+    # Test files can be more lenient
+    - path: _test\.go
+      linters:
+        - errcheck      # Test error handling can be simpler
+        - dupl          # Duplicate code in tests is okay
+
+    # Embedded task files (*.txt) should be ignored
+    - path: tasks/
+      linters:
+        - gofmt
+        - goimports
+
+    # CLI Cobra handlers have required unused parameters (standard Cobra pattern)
+    - path: internal/cli/
+      text: "unused-parameter"
+
+    # Allow package name conflict in internal errors (it's internal-only)  
+    - path: internal/errors/
+      text: "var-naming"
+
+    # Stuttering type names in internal packages are acceptable
+    - text: "stutters"
+
+    # Exported consts/types without comments are acceptable in internal packages
+    - path: internal/
+      text: "exported:.*(should have comment|or be unexported)"
+
+  # Include all standard exclusions (err, ErrXxx, etc.)
+  exclude-use-default: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/lemon07r/sanityharness

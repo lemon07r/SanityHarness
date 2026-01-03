@@ -1,0 +1,16 @@
+// Package letter provides concurrent letter frequency counting.
+package letter
+
+// FreqMap is a map from rune to frequency count.
+type FreqMap map[rune]int
+
+// Frequency counts the frequency of letters in a single text.
+func Frequency(text string) FreqMap {
+	panic("Please implement Frequency")
+}
+
+// ConcurrentFrequency counts the frequency of letters in multiple texts
+// concurrently using goroutines.
+func ConcurrentFrequency(texts []string) FreqMap {
+	panic("Please implement ConcurrentFrequency")
+}

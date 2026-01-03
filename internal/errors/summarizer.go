@@ -88,7 +88,7 @@ func (s *Summarizer) fallbackSummary(output string) []string {
 	return result
 }
 
-// Go error patterns
+// Go error patterns.
 var goPatterns = []Pattern{
 	{regexp.MustCompile(`DATA RACE`), "Race condition detected"},
 	{regexp.MustCompile(`fatal error: all goroutines are asleep - deadlock`), "Deadlock detected"},
@@ -107,7 +107,7 @@ var goPatterns = []Pattern{
 	{regexp.MustCompile(`FAIL\s+(.+)\s+\[`), "Test failed: $1"},
 }
 
-// Rust error patterns
+// Rust error patterns.
 var rustPatterns = []Pattern{
 	{regexp.MustCompile(`error\[E0382\]`), "Use of moved value (borrow checker)"},
 	{regexp.MustCompile(`error\[E0499\]`), "Cannot borrow as mutable more than once"},
@@ -125,7 +125,7 @@ var rustPatterns = []Pattern{
 	{regexp.MustCompile(`test .+ \.\.\. FAILED`), "Test failed"},
 }
 
-// TypeScript error patterns
+// TypeScript error patterns.
 var tsPatterns = []Pattern{
 	{regexp.MustCompile(`TS2322: Type '(.+?)' is not assignable to type '(.+?)'`), "Type '$1' is not assignable to '$2'"},
 	{regexp.MustCompile(`TS2339: Property '(.+?)' does not exist on type '(.+?)'`), "Property '$1' does not exist on type '$2'"},

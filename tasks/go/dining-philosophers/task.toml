@@ -1,0 +1,14 @@
+slug = "dining-philosophers"
+name = "Dining Philosophers"
+language = "go"
+difficulty = "hard"
+description = "Solve the classic dining philosophers concurrency problem without deadlock"
+
+[files]
+stub = ["dining_philosophers.go.txt"]
+test = ["dining_philosophers_test.go.txt"]
+support = ["go.mod.txt"]
+
+[validation]
+command = "go"
+args = ["test", "-race", "-v", "-timeout", "30s", "./..."]

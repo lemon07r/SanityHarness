@@ -56,7 +56,7 @@ type Attempt struct {
 // NewSession creates a new session with the given parameters.
 func NewSession(taskSlug, language string, cfg SessionConfig) *Session {
 	now := time.Now()
-	id := fmt.Sprintf("%s-%s", taskSlug, now.Format("2006-01-02T150405"))
+	id := fmt.Sprintf("%s-%s-%s", language, taskSlug, now.Format("2006-01-02T150405.000"))
 
 	return &Session{
 		ID:        id,
@@ -149,6 +149,7 @@ func (s *Session) Save(baseDir string) error {
 	}
 
 	// Write final code
+	hasGoFiles := false
 	for filename, content := range s.FinalCode {
 		codePath := filepath.Join(dir, "workspace", filename)
 		if err := os.MkdirAll(filepath.Dir(codePath), 0755); err != nil {
@@ -156,6 +157,20 @@ func (s *Session) Save(baseDir string) error {
 		}
 		if err := os.WriteFile(codePath, []byte(content), 0644); err != nil {
 			return fmt.Errorf("writing code file: %w", err)
+		}
+		if strings.HasSuffix(filename, ".go") {
+			hasGoFiles = true
+		}
+	}
+
+	// Prevent Go tooling from treating saved workspaces as part of this module.
+	if hasGoFiles {
+		modPath := filepath.Join(dir, "workspace", "go.mod")
+		if _, err := os.Stat(modPath); err != nil {
+			mod := "module sanityharness-session\n\ngo 1.25\n"
+			if err := os.WriteFile(modPath, []byte(mod), 0644); err != nil {
+				return fmt.Errorf("writing workspace go.mod: %w", err)
+			}
 		}
 	}
 

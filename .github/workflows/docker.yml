@@ -21,13 +21,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - dockerfile: containers/Dockerfile.go
+          - dockerfile: containers/Dockerfile-go
             image: sanity-go
             tag: latest
-          - dockerfile: containers/Dockerfile.rust
+          - dockerfile: containers/Dockerfile-rust
             image: sanity-rust
             tag: latest
-          - dockerfile: containers/Dockerfile.ts
+          - dockerfile: containers/Dockerfile-ts
             image: sanity-ts
             tag: latest
 

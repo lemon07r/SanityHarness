@@ -1,0 +1,12 @@
+[package]
+name = "doubly_linked_list"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "tests"
+path = "tests.rs"
+
+[lib]
+name = "doubly_linked_list"
+path = "lib.rs"

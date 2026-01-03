@@ -11,6 +11,7 @@ import (
 
 	"github.com/lemon07r/sanityharness/internal/result"
 	"github.com/lemon07r/sanityharness/internal/runner"
+	"github.com/lemon07r/sanityharness/internal/task"
 	"github.com/lemon07r/sanityharness/tasks"
 )
 
@@ -37,13 +38,27 @@ Examples:
   sanity run bank-account -w ./my-workspace`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		taskSlug := args[0]
+		taskRef := args[0]
 
 		r, err := runner.NewRunner(cfg, tasks.FS, tasksDir, logger)
 		if err != nil {
 			return err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
+
+		t, err := r.ResolveTaskRef(taskRef)
+		if err != nil {
+			return err
+		}
+
+		workspaceDir := runWorkspace
+		if workspaceDir == "" {
+			if _, _, ok := task.ParseTaskID(taskRef); ok {
+				workspaceDir = fmt.Sprintf("%s-%s", t.Language, t.Slug)
+			} else {
+				workspaceDir = t.Slug
+			}
+		}
 
 		// Setup context with cancellation
 		ctx, cancel := context.WithCancel(context.Background())
@@ -60,18 +75,22 @@ Examples:
 
 		// Run the task
 		session, err := r.Run(ctx, runner.RunOptions{
-			TaskSlug:     taskSlug,
+			Task:         t,
 			WatchMode:    runWatch,
 			MaxAttempts:  runMaxAttempts,
 			Timeout:      runTimeout,
 			OutputDir:    runOutput,
-			WorkspaceDir: runWorkspace,
+			WorkspaceDir: workspaceDir,
 		})
 
 		// Print final result
 		if session != nil {
 			fmt.Print(result.FormatFinalResult(session))
-			fmt.Printf(" Session saved to: %s\n\n", session.SessionDir(cfg.Harness.SessionDir))
+			outputDir := runOutput
+			if outputDir == "" {
+				outputDir = cfg.Harness.SessionDir
+			}
+			fmt.Printf(" Session saved to: %s\n\n", session.SessionDir(outputDir))
 		}
 
 		if err != nil {

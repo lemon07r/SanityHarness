@@ -4,6 +4,7 @@ package runner
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"time"
 
 	"github.com/lemon07r/sanityharness/internal/config"
-	"github.com/lemon07r/sanityharness/internal/errors"
+	errsummary "github.com/lemon07r/sanityharness/internal/errors"
 	"github.com/lemon07r/sanityharness/internal/result"
 	"github.com/lemon07r/sanityharness/internal/task"
 )
@@ -40,6 +41,22 @@ func NewRunner(cfg *config.Config, tasksFS embed.FS, tasksDir string, logger *sl
 	}, nil
 }
 
+// ResolveTaskRef resolves a task reference, which can be either a bare slug (if unambiguous)
+// or a canonical ID in the form "<language>/<slug>".
+func (r *Runner) ResolveTaskRef(ref string) (*task.Task, error) {
+	tasks, err := r.ListTasks()
+	if err != nil {
+		return nil, fmt.Errorf("listing tasks: %w", err)
+	}
+
+	t, err := task.ResolveRef(tasks, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	return t, nil
+}
+
 // Close cleans up runner resources.
 func (r *Runner) Close() error {
 	return r.docker.Close()
@@ -64,6 +81,10 @@ type RunOptions struct {
 	Timeout      int
 	OutputDir    string
 	WorkspaceDir string
+
+	// ValidationCommand overrides the task's default validation command when set.
+	// The first element is the command, followed by args.
+	ValidationCommand []string
 }
 
 // Run executes a task and returns the session result.
@@ -116,6 +137,10 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 		return nil, fmt.Errorf("no image configured for language: %s", t.Language)
 	}
 
+	if err := r.docker.Ping(ctx); err != nil {
+		return nil, err
+	}
+
 	// Ensure image is available
 	r.logger.Info("ensuring container image", "image", imageName)
 	if err := r.docker.EnsureImage(ctx, imageName, r.cfg.Docker.AutoPull); err != nil {
@@ -132,10 +157,30 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 
 	// Create container
 	r.logger.Info("creating container", "workspace", workspaceDir)
+	containerUser := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	containerEnv := []string{"HOME=/tmp"}
+	switch t.Language {
+	case task.Rust:
+		containerEnv = append(containerEnv,
+			"CARGO_TARGET_DIR=/tmp/sanity-cargo-target",
+			"CARGO_HOME=/tmp/sanity-cargo-home",
+		)
+	case task.Go:
+		containerEnv = append(containerEnv,
+			"GOCACHE=/tmp/sanity-go-build-cache",
+			"GOMODCACHE=/tmp/sanity-go-mod-cache",
+		)
+	case task.TypeScript:
+		containerEnv = append(containerEnv,
+			"npm_config_cache=/tmp/sanity-npm-cache",
+		)
+	}
 	containerID, err := r.docker.CreateContainer(ctx, ContainerConfig{
 		Image:        imageName,
 		WorkspaceDir: workspaceDir,
-		Name:         fmt.Sprintf("sanity-%s-%d", t.Slug, time.Now().Unix()),
+		Name:         fmt.Sprintf("sanity-%s-%s-%d", t.Language, t.Slug, time.Now().UnixNano()),
+		User:         containerUser,
+		Env:          containerEnv,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating container: %w", err)
@@ -151,7 +196,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 	}
 
 	// Create error summarizer
-	summarizer := errors.NewSummarizer(string(t.Language))
+	summarizer := errsummary.NewSummarizer(string(t.Language))
 
 	// Run validation
 	if opts.WatchMode {
@@ -177,8 +222,13 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 }
 
 // runSingle runs a single validation attempt.
-func (r *Runner) runSingle(ctx context.Context, t *task.Task, containerID string, session *result.Session, summarizer *errors.Summarizer, opts RunOptions) error {
-	execResult, err := r.docker.Exec(ctx, containerID, t.ValidationCommand(), "/workspace", time.Duration(opts.Timeout)*time.Second)
+func (r *Runner) runSingle(ctx context.Context, t *task.Task, containerID string, session *result.Session, summarizer *errsummary.Summarizer, opts RunOptions) error {
+	cmd := t.ValidationCommand()
+	if len(opts.ValidationCommand) > 0 {
+		cmd = opts.ValidationCommand
+	}
+
+	execResult, err := r.docker.Exec(ctx, containerID, cmd, "/workspace", time.Duration(opts.Timeout)*time.Second)
 	if err != nil {
 		session.Status = result.StatusError
 		return fmt.Errorf("executing validation: %w", err)
@@ -194,7 +244,7 @@ func (r *Runner) runSingle(ctx context.Context, t *task.Task, containerID string
 }
 
 // runWatchMode runs validation in watch mode.
-func (r *Runner) runWatchMode(ctx context.Context, t *task.Task, containerID string, session *result.Session, summarizer *errors.Summarizer, workspaceDir string, opts RunOptions) error {
+func (r *Runner) runWatchMode(ctx context.Context, t *task.Task, containerID string, session *result.Session, summarizer *errsummary.Summarizer, workspaceDir string, opts RunOptions) error {
 	// Initial run
 	if err := r.runAttempt(ctx, t, containerID, session, summarizer, opts); err != nil {
 		return err
@@ -219,7 +269,7 @@ func (r *Runner) runWatchMode(ctx context.Context, t *task.Task, containerID str
 	defer cancelWatch()
 
 	go func() {
-		if err := watcher.Watch(watchCtx); err != nil && err != context.Canceled {
+		if err := watcher.Watch(watchCtx); err != nil && !errors.Is(err, context.Canceled) {
 			r.logger.Error("watcher error", "error", err)
 		}
 	}()
@@ -248,10 +298,15 @@ func (r *Runner) runWatchMode(ctx context.Context, t *task.Task, containerID str
 }
 
 // runAttempt runs a single validation attempt and updates the session.
-func (r *Runner) runAttempt(ctx context.Context, t *task.Task, containerID string, session *result.Session, summarizer *errors.Summarizer, opts RunOptions) error {
+func (r *Runner) runAttempt(ctx context.Context, t *task.Task, containerID string, session *result.Session, summarizer *errsummary.Summarizer, opts RunOptions) error {
 	r.logger.Debug("running validation attempt", "attempt", len(session.Attempts)+1)
 
-	execResult, err := r.docker.Exec(ctx, containerID, t.ValidationCommand(), "/workspace", time.Duration(opts.Timeout)*time.Second)
+	cmd := t.ValidationCommand()
+	if len(opts.ValidationCommand) > 0 {
+		cmd = opts.ValidationCommand
+	}
+
+	execResult, err := r.docker.Exec(ctx, containerID, cmd, "/workspace", time.Duration(opts.Timeout)*time.Second)
 	if err != nil {
 		session.Status = result.StatusTimeout
 		return fmt.Errorf("executing validation: %w", err)

@@ -1,0 +1,12 @@
+[package]
+name = "generational_arena"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "tests"
+path = "tests.rs"
+
+[lib]
+name = "generational_arena"
+path = "lib.rs"

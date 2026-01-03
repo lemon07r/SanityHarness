@@ -1,0 +1,20 @@
+// Package singleflight provides duplicate function call suppression.
+package singleflight
+
+// Group represents a class of work and forms a namespace in which units of work
+// can be executed with duplicate suppression.
+type Group struct {
+	// TODO: Add fields.
+}
+
+// Do executes and returns the results of the given function, making sure that
+// only one execution is in-flight for a given key at a time.
+//
+// If a duplicate comes in, the duplicate caller waits for the original to
+// complete and receives the same results.
+//
+// The returned shared value is true if the result was shared with another
+// caller.
+func (g *Group) Do(key string, fn func() (interface{}, error)) (interface{}, error, bool) {
+	panic("Please implement Do")
+}

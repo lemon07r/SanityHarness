@@ -1,0 +1,15 @@
+[package]
+name = "parallel_letter_frequency"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rayon = "1.8"
+
+[[test]]
+name = "tests"
+path = "tests.rs"
+
+[lib]
+name = "parallel_letter_frequency"
+path = "lib.rs"

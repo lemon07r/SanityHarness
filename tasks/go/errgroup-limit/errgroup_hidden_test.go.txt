@@ -1,0 +1,23 @@
+package errgroup
+
+import "testing"
+
+func TestNewWithZeroLimitDefaultsToOne(t *testing.T) {
+	g := New(0)
+	if g == nil {
+		t.Fatal("New(0) returned nil")
+	}
+
+	// If limit defaults to 1, this should not deadlock.
+	g.Go(func() error { return nil })
+	if err := g.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v, want nil", err)
+	}
+}
+
+func TestWaitWithNoTasksReturnsNil(t *testing.T) {
+	g := New(3)
+	if err := g.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v, want nil", err)
+	}
+}

@@ -1,0 +1,54 @@
+package singleflight
+
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+func TestDoSharesErrorResult(t *testing.T) {
+	var g Group
+
+	start := make(chan struct{})
+	const n = 20
+
+	var calls atomic.Int32
+	var sharedCount atomic.Int32
+	errs := make([]error, n)
+
+	wantErr := errors.New("boom")
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err, shared := g.Do("k", func() (interface{}, error) {
+				calls.Add(1)
+				return nil, wantErr
+			})
+			if shared {
+				sharedCount.Add(1)
+			}
+			errs[i] = err
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("fn calls = %d, want 1", got)
+	}
+	if got := sharedCount.Load(); got != n-1 {
+		t.Fatalf("shared calls = %d, want %d", got, n-1)
+	}
+	for i, err := range errs {
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("errs[%d] = %v, want %v", i, err, wantErr)
+		}
+	}
+}

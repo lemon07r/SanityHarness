@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,7 +29,7 @@ var (
 	evalOutputDir string
 )
 
-// EvalResult holds the result of evaluating a single task
+// EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
 	Task     string  `json:"task"`
 	Language string  `json:"language"`
@@ -36,7 +39,7 @@ type EvalResult struct {
 	Error    string  `json:"error,omitempty"`
 }
 
-// EvalSummary holds the overall evaluation summary
+// EvalSummary holds the overall evaluation summary.
 type EvalSummary struct {
 	Agent     string       `json:"agent"`
 	Model     string       `json:"model,omitempty"`
@@ -85,7 +88,7 @@ Examples:
 		if err != nil {
 			return err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		// Get tasks to run
 		allTasks, err := r.ListTasks()
@@ -110,18 +113,24 @@ Examples:
 
 		// Filter by specific tasks if specified
 		if evalTasks != "" {
-			slugs := strings.Split(evalTasks, ",")
-			slugMap := make(map[string]bool)
-			for _, s := range slugs {
-				slugMap[strings.TrimSpace(s)] = true
-			}
-			var filtered []*task.Task
-			for _, t := range allTasks {
-				if slugMap[t.Slug] {
-					filtered = append(filtered, t)
+			tokens := strings.Split(evalTasks, ",")
+			var selected []*task.Task
+			seen := make(map[string]bool)
+			for _, tok := range tokens {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				t, err := task.ResolveRef(allTasks, tok)
+				if err != nil {
+					return fmt.Errorf("resolving task %q: %w", tok, err)
+				}
+				if !seen[t.ID()] {
+					seen[t.ID()] = true
+					selected = append(selected, t)
 				}
 			}
-			allTasks = filtered
+			allTasks = selected
 		}
 
 		if len(allTasks) == 0 {
@@ -157,7 +166,7 @@ Examples:
 
 		for i, t := range allTasks {
 			fmt.Println("─────────────────────────────────────────────────────────────")
-			fmt.Printf(" [%d/%d] %s (%s)\n", i+1, len(allTasks), t.Slug, t.Language)
+			fmt.Printf(" [%d/%d] %s\n", i+1, len(allTasks), t.ID())
 			fmt.Println("─────────────────────────────────────────────────────────────")
 
 			result := runTaskWithAgent(r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
@@ -226,9 +235,11 @@ Examples:
 func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) EvalResult {
 	start := time.Now()
 	result := EvalResult{
-		Task:     t.Slug,
+		Task:     t.ID(),
 		Language: string(t.Language),
 	}
+
+	loader := task.NewLoader(tasks.FS, tasksDir)
 
 	// Create workspace for this task - use language prefix to avoid slug collisions
 	workspaceName := fmt.Sprintf("%s-%s", t.Language, t.Slug)
@@ -243,6 +254,13 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	var cmd *exec.Cmd
 	prompt := buildAgentPrompt(t)
 
+	agentTimeout := time.Duration(timeout) * time.Second
+	if agentTimeout <= 0 {
+		agentTimeout = 120 * time.Second
+	}
+	agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	defer cancel()
+
 	switch agent {
 	case "gemini":
 		args := []string{"--yolo"}
@@ -250,11 +268,11 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 			args = append(args, "--model", model)
 		}
 		args = append(args, prompt)
-		cmd = exec.Command("gemini", args...)
+		cmd = exec.CommandContext(agentCtx, "gemini", args...)
 
 	case "opencode":
 		// OpenCode with prompt flag
-		cmd = exec.Command("opencode", "-p", prompt)
+		cmd = exec.CommandContext(agentCtx, "opencode", "-p", prompt)
 	}
 
 	cmd.Dir = workspaceDir
@@ -266,14 +284,38 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	if err == nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		defer logFile.Close()
+		defer func() { _ = logFile.Close() }()
 	}
 
 	// Run agent
 	agentErr := cmd.Run()
+	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
+		logger.Debug("agent timed out", "timeout", agentTimeout)
+	}
 	if agentErr != nil {
 		logger.Debug("agent returned error", "error", agentErr)
 		// Don't fail yet - the tests will determine success
+	}
+
+	// Ensure the agent didn't modify task-owned files.
+	modified, err := detectModifiedTaskFiles(loader, t, workspaceDir)
+	if err != nil {
+		result.Error = fmt.Sprintf("integrity check failed: %v", err)
+		result.Duration = time.Since(start).Seconds()
+		return result
+	}
+	if len(modified) > 0 {
+		sort.Strings(modified)
+		result.Error = fmt.Sprintf("modified task files (disallowed): %s", strings.Join(modified, ", "))
+		result.Duration = time.Since(start).Seconds()
+		return result
+	}
+
+	// Add hidden tests (not shown to the agent) before validation.
+	if err := writeTaskFilesToWorkspace(loader, t, workspaceDir, t.HiddenTestFiles()); err != nil {
+		result.Error = fmt.Sprintf("writing hidden tests: %v", err)
+		result.Duration = time.Since(start).Seconds()
+		return result
 	}
 
 	// Run sanity harness to validate
@@ -282,11 +324,20 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		timeout = 120
 	}
 
+	validationCmd := []string(nil)
+	if t.Language == task.TypeScript && len(t.HiddenTestFiles()) > 0 {
+		validationCmd = append([]string{}, t.ValidationCommand()...)
+		for _, filename := range t.HiddenTestFiles() {
+			validationCmd = append(validationCmd, stripTxtExtension(filename))
+		}
+	}
+
 	session, err := r.Run(ctx, runner.RunOptions{
-		Task:         t, // Pass task directly to avoid slug collision
-		WorkspaceDir: workspaceDir,
-		Timeout:      timeout,
-		MaxAttempts:  1,
+		Task:              t, // Pass task directly to avoid slug collision
+		WorkspaceDir:      workspaceDir,
+		Timeout:           timeout,
+		MaxAttempts:       1,
+		ValidationCommand: validationCmd,
 	})
 
 	result.Duration = time.Since(start).Seconds()
@@ -315,8 +366,59 @@ Your job:
 3. Handle all edge cases shown in the tests
 4. Ensure thread-safety if the tests use concurrent operations
 
-Write your complete implementation to the source file. Do not modify the test file.`,
+Write your complete implementation to the source file.
+
+IMPORTANT RULES:
+- Do NOT modify test files or support files (e.g. go.mod, Cargo.toml). Evaluation will fail if you do.
+- Only edit the stub/solution source files (and optionally add new helper source files if needed).`,
 		t.Name, t.Language)
+}
+
+func stripTxtExtension(filename string) string {
+	if strings.HasSuffix(filename, ".txt") {
+		return strings.TrimSuffix(filename, ".txt")
+	}
+	return filename
+}
+
+func detectModifiedTaskFiles(loader *task.Loader, t *task.Task, workspaceDir string) ([]string, error) {
+	var modified []string
+	for _, filename := range append(append([]string{}, t.Files.Test...), t.Files.Support...) {
+		want, err := loader.ReadTaskFile(t, filename)
+		if err != nil {
+			return nil, fmt.Errorf("reading canonical %s: %w", filename, err)
+		}
+
+		workspacePath := filepath.Join(workspaceDir, stripTxtExtension(filename))
+		got, err := os.ReadFile(workspacePath)
+		if err != nil {
+			modified = append(modified, stripTxtExtension(filename))
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			modified = append(modified, stripTxtExtension(filename))
+		}
+	}
+	return modified, nil
+}
+
+func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir string, files []string) error {
+	for _, filename := range files {
+		content, err := loader.ReadTaskFile(t, filename)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", filename, err)
+		}
+
+		destFilename := stripTxtExtension(filename)
+		destPath := filepath.Join(workspaceDir, destFilename)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return fmt.Errorf("creating directory for %s: %w", destFilename, err)
+		}
+		if err := os.WriteFile(destPath, content, 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", destFilename, err)
+		}
+	}
+	return nil
 }
 
 func init() {

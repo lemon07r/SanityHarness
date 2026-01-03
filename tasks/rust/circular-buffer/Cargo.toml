@@ -1,0 +1,12 @@
+[package]
+name = "circular_buffer"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "tests"
+path = "tests.rs"
+
+[lib]
+name = "circular_buffer"
+path = "lib.rs"

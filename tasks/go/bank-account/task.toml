@@ -1,0 +1,14 @@
+slug = "bank-account"
+name = "Bank Account"
+language = "go"
+difficulty = "hard"
+description = "Implement a bank account with concurrent access support using mutexes"
+
+[files]
+stub = ["bank_account.go.txt"]
+test = ["bank_account_test.go.txt"]
+support = ["go.mod.txt"]
+
+[validation]
+command = "go"
+args = ["test", "-race", "-v", "./..."]

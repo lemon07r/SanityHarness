@@ -1,0 +1,141 @@
+package singleflight
+
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestDoSequentialIsNotCached(t *testing.T) {
+	var g Group
+
+	var calls atomic.Int32
+
+	v1, err1, shared1 := g.Do("k", func() (interface{}, error) {
+		calls.Add(1)
+		return 1, nil
+	})
+	if err1 != nil {
+		t.Fatalf("unexpected error: %v", err1)
+	}
+	if shared1 {
+		t.Fatalf("shared = true, want false")
+	}
+	if v1.(int) != 1 {
+		t.Fatalf("v = %v, want 1", v1)
+	}
+
+	v2, err2, shared2 := g.Do("k", func() (interface{}, error) {
+		calls.Add(1)
+		return 2, nil
+	})
+	if err2 != nil {
+		t.Fatalf("unexpected error: %v", err2)
+	}
+	if shared2 {
+		t.Fatalf("shared = true, want false")
+	}
+	if v2.(int) != 2 {
+		t.Fatalf("v = %v, want 2", v2)
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("fn calls = %d, want 2", got)
+	}
+}
+
+func TestDoConcurrentSameKeyCallsOnce(t *testing.T) {
+	var g Group
+
+	const n = 50
+	start := make(chan struct{})
+
+	var calls atomic.Int32
+	var sharedCount atomic.Int32
+	vals := make([]int, n)
+	errs := make([]error, n)
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			<-start
+			v, err, shared := g.Do("k", func() (interface{}, error) {
+				calls.Add(1)
+				time.Sleep(10 * time.Millisecond)
+				return 42, nil
+			})
+			if shared {
+				sharedCount.Add(1)
+			}
+			if v != nil {
+				vals[i] = v.(int)
+			}
+			errs[i] = err
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("fn calls = %d, want 1", got)
+	}
+	if got := sharedCount.Load(); got != n-1 {
+		t.Fatalf("shared calls = %d, want %d", got, n-1)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("errs[%d] = %v, want nil", i, err)
+		}
+		if vals[i] != 42 {
+			t.Fatalf("vals[%d] = %d, want 42", i, vals[i])
+		}
+	}
+}
+
+func TestDoDifferentKeysCanRunConcurrently(t *testing.T) {
+	var g Group
+
+	startedA := make(chan struct{})
+	startedB := make(chan struct{})
+	release := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, _, _ = g.Do("a", func() (interface{}, error) {
+			close(startedA)
+			<-release
+			return 1, nil
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		_, _, _ = g.Do("b", func() (interface{}, error) {
+			close(startedB)
+			<-release
+			return 2, nil
+		})
+	}()
+
+	select {
+	case <-startedA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("key a did not start")
+	}
+	select {
+	case <-startedB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("key b did not start (possible global serialization)")
+	}
+
+	close(release)
+	wg.Wait()
+}

@@ -1,0 +1,15 @@
+slug = "errgroup-limit"
+name = "ErrGroup (Concurrency Limit)"
+language = "go"
+difficulty = "hard"
+description = "Run functions concurrently with a max concurrency limit and stop scheduling on first error"
+
+[files]
+stub = ["errgroup.go.txt"]
+test = ["errgroup_test.go.txt"]
+hidden_test = ["errgroup_hidden_test.go.txt"]
+support = ["go.mod.txt"]
+
+[validation]
+command = "go"
+args = ["test", "-race", "-v", "-timeout", "30s", "./..."]

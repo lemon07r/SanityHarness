@@ -77,7 +77,7 @@ func (d *DockerClient) PullImage(ctx context.Context, imageName string) error {
 	if err != nil {
 		return fmt.Errorf("pulling image %s: %w", imageName, err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Consume the output to wait for completion
 	_, err = io.Copy(io.Discard, reader)
@@ -111,6 +111,8 @@ type ContainerConfig struct {
 	Image        string
 	WorkspaceDir string
 	Name         string
+	User         string
+	Env          []string
 }
 
 // CreateContainer creates a new container with the specified configuration.
@@ -119,6 +121,8 @@ func (d *DockerClient) CreateContainer(ctx context.Context, cfg ContainerConfig)
 		Image: cfg.Image,
 		Cmd:   []string{"sleep", "infinity"},
 		Tty:   false,
+		User:  cfg.User,
+		Env:   cfg.Env,
 	}
 
 	hostCfg := &container.HostConfig{
@@ -247,7 +251,7 @@ func (d *DockerClient) GetContainerLogs(ctx context.Context, containerID string)
 	if err != nil {
 		return "", fmt.Errorf("getting container logs: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, reader)
