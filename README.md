@@ -195,7 +195,7 @@ auto_pull = true
 sanityharness/
 ├── cmd/sanity/          # CLI entry point
 ├── internal/
-│   ├── cli/             # Cobra commands (list, init, run, show, eval, version)
+│   ├── cli/             # Cobra commands (list, init, run, show, eval, clean, version)
 │   ├── config/          # TOML configuration with defaults
 │   ├── errors/          # Language-specific error summarization
 │   ├── result/          # Session and attempt types, output formatting
