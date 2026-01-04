@@ -1,6 +1,7 @@
 slug = "flow-processor"
 name = "Flow Processor"
 language = "kotlin"
+tier = "extended"
 difficulty = "hard"
 description = "Implement a composable Kotlin Flow processor with transformations and error handling"
 agent_timeout = 240

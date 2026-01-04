@@ -1,6 +1,7 @@
 slug = "parallel-letter-frequency"
 name = "Parallel Letter Frequency"
 language = "rust"
+tier = "core"
 difficulty = "hard"
 description = "Count letter frequencies using multiple threads with proper synchronization"
 

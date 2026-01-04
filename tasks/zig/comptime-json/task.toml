@@ -1,6 +1,7 @@
 slug = "comptime-json"
 name = "Comptime JSON Parser"
 language = "zig"
+tier = "extended"
 difficulty = "expert"
 description = "Parse JSON schema at compile time to generate type-safe struct definitions"
 agent_timeout = 240

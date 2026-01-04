@@ -1,6 +1,7 @@
 slug = "dining-philosophers"
 name = "Dining Philosophers"
 language = "go"
+tier = "core"
 difficulty = "hard"
 description = "Solve the classic dining philosophers concurrency problem without deadlock"
 

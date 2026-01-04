@@ -1,6 +1,7 @@
 slug = "bank-account"
 name = "Bank Account"
 language = "go"
+tier = "core"
 difficulty = "hard"
 description = "Implement a bank account with concurrent access support using mutexes"
 

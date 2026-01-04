@@ -38,6 +38,9 @@ sessions/
 # Eval output (generated during sanity eval)
 eval-results/
 
+# Harness build caches (optional, improves performance)
+.sanity-cache/
+
 # Workspace directories (created by sanity init)
 # These are task workspaces created for agents
 /go-*/

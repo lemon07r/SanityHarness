@@ -14,8 +14,10 @@ import (
 )
 
 var (
-	listLanguage string
-	listJSON     bool
+	listLanguage   string
+	listTier       string
+	listDifficulty string
+	listJSON       bool
 )
 
 var listCmd = &cobra.Command{
@@ -46,6 +48,26 @@ var listCmd = &cobra.Command{
 			}
 		}
 
+		if listTier != "" {
+			var filtered []*task.Task
+			for _, t := range taskList {
+				if t.Tier == listTier {
+					filtered = append(filtered, t)
+				}
+			}
+			taskList = filtered
+		}
+
+		if listDifficulty != "" {
+			var filtered []*task.Task
+			for _, t := range taskList {
+				if t.Difficulty == listDifficulty {
+					filtered = append(filtered, t)
+				}
+			}
+			taskList = filtered
+		}
+
 		if listJSON {
 			return outputJSON(taskList)
 		}
@@ -56,6 +78,8 @@ var listCmd = &cobra.Command{
 
 func init() {
 	listCmd.Flags().StringVarP(&listLanguage, "language", "l", "", "filter by language (go, rust, typescript)")
+	listCmd.Flags().StringVar(&listTier, "tier", "", "filter by tier (core, extended)")
+	listCmd.Flags().StringVar(&listDifficulty, "difficulty", "", "filter by difficulty (e.g., hard, expert)")
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "output as JSON")
 }
 
@@ -72,15 +96,15 @@ func outputTable(taskList []*task.Task) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tLANGUAGE\tDIFFICULTY\tDESCRIPTION")
-	_, _ = fmt.Fprintln(w, "--\t--------\t----------\t-----------")
+	_, _ = fmt.Fprintln(w, "ID\tLANGUAGE\tTIER\tDIFFICULTY\tDESCRIPTION")
+	_, _ = fmt.Fprintln(w, "--\t--------\t----\t----------\t-----------")
 
 	for _, t := range taskList {
 		desc := t.Description
 		if len(desc) > 50 {
 			desc = desc[:47] + "..."
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID(), t.Language, t.Difficulty, desc)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID(), t.Language, t.Tier, t.Difficulty, desc)
 	}
 
 	return w.Flush()

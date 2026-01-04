@@ -1,6 +1,7 @@
 slug = "react"
 name = "React (Reactive Cells)"
 language = "go"
+tier = "extended"
 difficulty = "hard"
 description = "Implement reactive spreadsheet-like cells with change propagation"
 agent_timeout = 300

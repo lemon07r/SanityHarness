@@ -18,3 +18,10 @@ type Group struct {
 func (g *Group) Do(key string, fn func() (interface{}, error)) (interface{}, error, bool) {
 	panic("Please implement Do")
 }
+
+// Forget removes a key from the group, allowing the next call to execute.
+//
+// This is safe to call even if the key is not currently in-flight.
+func (g *Group) Forget(key string) {
+	panic("Please implement Forget")
+}

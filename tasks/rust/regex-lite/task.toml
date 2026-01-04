@@ -1,6 +1,7 @@
 slug = "regex-lite"
 name = "Regex Lite"
 language = "rust"
+tier = "core"
 difficulty = "hard"
 description = "Implement regex-style matching for '.', '*' (full-string match)"
 

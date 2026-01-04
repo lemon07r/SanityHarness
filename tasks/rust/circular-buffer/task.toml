@@ -1,6 +1,7 @@
 slug = "circular-buffer"
 name = "Circular Buffer"
 language = "rust"
+tier = "core"
 difficulty = "hard"
 description = "Implement a circular buffer with ownership transfer semantics"
 

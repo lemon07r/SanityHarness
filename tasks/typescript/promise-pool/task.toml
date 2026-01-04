@@ -1,6 +1,7 @@
 slug = "promise-pool"
 name = "Promise Pool"
 language = "typescript"
+tier = "core"
 difficulty = "hard"
 description = "Run promise-returning tasks with a concurrency limit while preserving result order"
 

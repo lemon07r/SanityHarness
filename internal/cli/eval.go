@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -25,32 +27,61 @@ var (
 	evalModel          string
 	evalTasks          string
 	evalLang           string
+	evalTier           string
+	evalDifficulty     string
 	evalTimeout        int
 	evalOutputDir      string
 	evalKeepWorkspaces bool
+	evalParallel       int
 )
 
 // EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
 	Task         string  `json:"task"`
 	Language     string  `json:"language"`
+	Tier         string  `json:"tier,omitempty"`
+	Difficulty   string  `json:"difficulty,omitempty"`
 	Passed       bool    `json:"passed"`
 	Attempts     int     `json:"attempts"`
 	Duration     float64 `json:"duration_seconds"`
+	AgentTime    float64 `json:"agent_duration_seconds,omitempty"`
+	ValidateTime float64 `json:"validation_duration_seconds,omitempty"`
+	PromptChars  int     `json:"prompt_chars,omitempty"`
 	Error        string  `json:"error,omitempty"`
 	WorkspaceDir string  `json:"-"` // Not serialized, used for cleanup
 }
 
+// EvalAggregate summarizes results for a group (language, tier, difficulty).
+type EvalAggregate struct {
+	Passed       int     `json:"passed"`
+	Failed       int     `json:"failed"`
+	Total        int     `json:"total"`
+	PassRate     float64 `json:"pass_rate"`
+	Duration     float64 `json:"duration_seconds"`
+	AgentTime    float64 `json:"agent_duration_seconds"`
+	ValidateTime float64 `json:"validation_duration_seconds"`
+}
+
 // EvalSummary holds the overall evaluation summary.
 type EvalSummary struct {
-	Agent     string       `json:"agent"`
-	Model     string       `json:"model,omitempty"`
-	Timestamp string       `json:"timestamp"`
-	Results   []EvalResult `json:"results"`
-	Passed    int          `json:"passed"`
-	Failed    int          `json:"failed"`
-	Total     int          `json:"total"`
-	PassRate  float64      `json:"pass_rate"`
+	Agent        string                   `json:"agent"`
+	Model        string                   `json:"model,omitempty"`
+	Timestamp    string                   `json:"timestamp"`
+	Tier         string                   `json:"tier,omitempty"`
+	Difficulty   string                   `json:"difficulty,omitempty"`
+	Parallel     int                      `json:"parallel,omitempty"`
+	Results      []EvalResult             `json:"results"`
+	Passed       int                      `json:"passed"`
+	Failed       int                      `json:"failed"`
+	Total        int                      `json:"total"`
+	PassRate     float64                  `json:"pass_rate"`
+	Duration     float64                  `json:"duration_seconds,omitempty"`
+	AgentTime    float64                  `json:"agent_duration_seconds,omitempty"`
+	ValidateTime float64                  `json:"validation_duration_seconds,omitempty"`
+	PromptChars  int                      `json:"prompt_chars,omitempty"`
+	ByLanguage   map[string]EvalAggregate `json:"by_language,omitempty"`
+	ByTier       map[string]EvalAggregate `json:"by_tier,omitempty"`
+	ByDifficulty map[string]EvalAggregate `json:"by_difficulty,omitempty"`
 }
 
 var evalCmd = &cobra.Command{
@@ -92,25 +123,23 @@ Examples:
 		}
 		defer func() { _ = r.Close() }()
 
+		// If the user specified another selector, default tier should not hide tasks.
+		tierChanged := cmd.Flags().Changed("tier")
+		if !tierChanged && (evalLang != "" || evalTasks != "" || evalDifficulty != "") {
+			evalTier = "all"
+		}
+
+		switch evalTier {
+		case "", "core", "extended", "all":
+			// OK
+		default:
+			return fmt.Errorf("invalid --tier %q (valid: core, extended, all)", evalTier)
+		}
+
 		// Get tasks to run
 		allTasks, err := r.ListTasks()
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
-		}
-
-		// Filter by language if specified
-		if evalLang != "" {
-			lang, err := task.ParseLanguage(evalLang)
-			if err != nil {
-				return err
-			}
-			var filtered []*task.Task
-			for _, t := range allTasks {
-				if t.Language == lang {
-					filtered = append(filtered, t)
-				}
-			}
-			allTasks = filtered
 		}
 
 		// Filter by specific tasks if specified
@@ -133,6 +162,51 @@ Examples:
 				}
 			}
 			allTasks = selected
+		}
+
+		// Filter by language if specified
+		if evalLang != "" {
+			lang, err := task.ParseLanguage(evalLang)
+			if err != nil {
+				return err
+			}
+			var filtered []*task.Task
+			for _, t := range allTasks {
+				if t.Language == lang {
+					filtered = append(filtered, t)
+				}
+			}
+			allTasks = filtered
+		}
+
+		// Filter by difficulty if specified
+		if evalDifficulty != "" {
+			want := make(map[string]bool)
+			for _, tok := range strings.Split(evalDifficulty, ",") {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				want[tok] = true
+			}
+			var filtered []*task.Task
+			for _, t := range allTasks {
+				if want[t.Difficulty] {
+					filtered = append(filtered, t)
+				}
+			}
+			allTasks = filtered
+		}
+
+		// Filter by tier if specified
+		if evalTier != "" && evalTier != "all" {
+			var filtered []*task.Task
+			for _, t := range allTasks {
+				if t.Tier == evalTier {
+					filtered = append(filtered, t)
+				}
+			}
+			allTasks = filtered
 		}
 
 		if len(allTasks) == 0 {
@@ -158,41 +232,119 @@ Examples:
 		if evalModel != "" {
 			fmt.Printf(" Model:   %s\n", evalModel)
 		}
+		if evalTier != "" {
+			fmt.Printf(" Tier:    %s\n", evalTier)
+		}
+		if evalDifficulty != "" {
+			fmt.Printf(" Difficulty: %s\n", evalDifficulty)
+		}
+		if evalParallel > 1 {
+			fmt.Printf(" Parallel: %d\n", evalParallel)
+		}
 		fmt.Printf(" Tasks:   %d\n", len(allTasks))
 		fmt.Printf(" Output:  %s\n", evalOutputDir)
 		fmt.Println()
 
-		// Run each task
-		var results []EvalResult
+		// Run tasks
+		results := make([]EvalResult, 0, len(allTasks))
 		passed, failed := 0, 0
 
-		for i, t := range allTasks {
-			fmt.Println("─────────────────────────────────────────────────────────────")
-			fmt.Printf(" [%d/%d] %s\n", i+1, len(allTasks), t.ID())
-			fmt.Println("─────────────────────────────────────────────────────────────")
+		parallel := evalParallel
+		if parallel <= 0 {
+			parallel = 1
+		}
 
-			result := runTaskWithAgent(r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
-			results = append(results, result)
+		if parallel == 1 {
+			for i, t := range allTasks {
+				fmt.Println("─────────────────────────────────────────────────────────────")
+				fmt.Printf(" [%d/%d] %s\n", i+1, len(allTasks), t.ID())
+				fmt.Println("─────────────────────────────────────────────────────────────")
 
-			if result.Passed {
-				fmt.Printf(" ✓ PASSED (%.2fs)\n", result.Duration)
-				passed++
-			} else {
-				fmt.Printf(" ✗ FAILED (%.2fs)\n", result.Duration)
-				if result.Error != "" {
-					fmt.Printf("   Error: %s\n", result.Error)
+				result := runTaskWithAgent(r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
+				results = append(results, result)
+
+				if result.Passed {
+					fmt.Printf(" ✓ PASSED (%.2fs)\n", result.Duration)
+					passed++
+				} else {
+					fmt.Printf(" ✗ FAILED (%.2fs)\n", result.Duration)
+					if result.Error != "" {
+						fmt.Printf("   Error: %s\n", result.Error)
+					}
+					failed++
 				}
-				failed++
+
+				// Clean up workspace unless --keep-workspaces is set
+				if !evalKeepWorkspaces && result.WorkspaceDir != "" {
+					if err := os.RemoveAll(result.WorkspaceDir); err != nil {
+						logger.Debug("failed to cleanup workspace", "dir", result.WorkspaceDir, "error", err)
+					}
+				}
+
+				fmt.Println()
+			}
+		} else {
+			type job struct {
+				idx int
+				t   *task.Task
+			}
+			type jobResult struct {
+				idx int
+				r   EvalResult
 			}
 
-			// Clean up workspace unless --keep-workspaces is set
-			if !evalKeepWorkspaces && result.WorkspaceDir != "" {
-				if err := os.RemoveAll(result.WorkspaceDir); err != nil {
-					logger.Debug("failed to cleanup workspace", "dir", result.WorkspaceDir, "error", err)
-				}
+			jobs := make(chan job)
+			jobResults := make(chan jobResult)
+
+			var wg sync.WaitGroup
+			for range parallel {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for j := range jobs {
+						res := runTaskWithAgent(r, j.t, evalAgent, evalModel, evalOutputDir, evalTimeout)
+						jobResults <- jobResult{idx: j.idx, r: res}
+					}
+				}()
 			}
 
-			fmt.Println()
+			go func() {
+				for i, t := range allTasks {
+					jobs <- job{idx: i, t: t}
+				}
+				close(jobs)
+				wg.Wait()
+				close(jobResults)
+			}()
+
+			collected := make([]EvalResult, len(allTasks))
+			seen := 0
+			for jr := range jobResults {
+				collected[jr.idx] = jr.r
+				seen++
+
+				status := "FAILED"
+				if jr.r.Passed {
+					status = "PASSED"
+				}
+				fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(allTasks), jr.r.Task, status, jr.r.Duration)
+				if !jr.r.Passed && jr.r.Error != "" {
+					fmt.Printf("   Error: %s\n", jr.r.Error)
+				}
+
+				if jr.r.Passed {
+					passed++
+				} else {
+					failed++
+				}
+
+				if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
+					if err := os.RemoveAll(jr.r.WorkspaceDir); err != nil {
+						logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
+					}
+				}
+			}
+			results = append(results, collected...)
 		}
 
 		// Calculate pass rate
@@ -218,15 +370,74 @@ Examples:
 		fmt.Println()
 
 		// Save summary
+		// Aggregate stats
+		byLanguage := make(map[string]EvalAggregate)
+		byTier := make(map[string]EvalAggregate)
+		byDifficulty := make(map[string]EvalAggregate)
+
+		var totalDuration float64
+		var totalAgentTime float64
+		var totalValidateTime float64
+		var totalPromptChars int
+
+		addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
+			agg := m[key]
+			if r.Passed {
+				agg.Passed++
+			} else {
+				agg.Failed++
+			}
+			agg.Total++
+			agg.Duration += r.Duration
+			agg.AgentTime += r.AgentTime
+			agg.ValidateTime += r.ValidateTime
+			m[key] = agg
+		}
+
+		for _, r := range results {
+			totalDuration += r.Duration
+			totalAgentTime += r.AgentTime
+			totalValidateTime += r.ValidateTime
+			totalPromptChars += r.PromptChars
+
+			addAgg(byLanguage, r.Language, r)
+			if r.Tier != "" {
+				addAgg(byTier, r.Tier, r)
+			}
+			if r.Difficulty != "" {
+				addAgg(byDifficulty, r.Difficulty, r)
+			}
+		}
+
+		finalize := func(m map[string]EvalAggregate) map[string]EvalAggregate {
+			for k, v := range m {
+				if v.Total > 0 {
+					v.PassRate = float64(v.Passed) / float64(v.Total) * 100
+				}
+				m[k] = v
+			}
+			return m
+		}
+
 		summary := EvalSummary{
-			Agent:     evalAgent,
-			Model:     evalModel,
-			Timestamp: timestamp,
-			Results:   results,
-			Passed:    passed,
-			Failed:    failed,
-			Total:     total,
-			PassRate:  passRate,
+			Agent:        evalAgent,
+			Model:        evalModel,
+			Timestamp:    timestamp,
+			Tier:         evalTier,
+			Difficulty:   evalDifficulty,
+			Parallel:     parallel,
+			Results:      results,
+			Passed:       passed,
+			Failed:       failed,
+			Total:        total,
+			PassRate:     passRate,
+			Duration:     totalDuration,
+			AgentTime:    totalAgentTime,
+			ValidateTime: totalValidateTime,
+			PromptChars:  totalPromptChars,
+			ByLanguage:   finalize(byLanguage),
+			ByTier:       finalize(byTier),
+			ByDifficulty: finalize(byDifficulty),
 		}
 
 		summaryPath := filepath.Join(evalOutputDir, "summary.json")
@@ -245,8 +456,10 @@ Examples:
 func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) EvalResult {
 	start := time.Now()
 	result := EvalResult{
-		Task:     t.ID(),
-		Language: string(t.Language),
+		Task:       t.ID(),
+		Language:   string(t.Language),
+		Tier:       t.Tier,
+		Difficulty: t.Difficulty,
 	}
 
 	loader := task.NewLoader(tasks.FS, tasksDir)
@@ -265,6 +478,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	// Build agent command
 	var cmd *exec.Cmd
 	prompt := buildAgentPrompt(t)
+	result.PromptChars = utf8.RuneCountInString(prompt)
 
 	agentTimeout := time.Duration(timeout) * time.Second
 	if agentTimeout <= 0 {
@@ -304,7 +518,9 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	}
 
 	// Run agent
+	agentStart := time.Now()
 	agentErr := cmd.Run()
+	result.AgentTime = time.Since(agentStart).Seconds()
 	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
 		logger.Debug("agent timed out", "timeout", agentTimeout)
 	}
@@ -348,6 +564,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		}
 	}
 
+	validateStart := time.Now()
 	session, err := r.Run(ctx, runner.RunOptions{
 		Task:              t, // Pass task directly to avoid slug collision
 		WorkspaceDir:      workspaceDir,
@@ -355,6 +572,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		MaxAttempts:       1,
 		ValidationCommand: validationCmd,
 	})
+	result.ValidateTime = time.Since(validateStart).Seconds()
 
 	result.Duration = time.Since(start).Seconds()
 
@@ -370,26 +588,50 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 }
 
 func buildAgentPrompt(t *task.Task) string {
-	return fmt.Sprintf(`You are solving a coding task called "%s" in %s.
+	stubFiles := make([]string, 0, len(t.Files.Stub))
+	for _, f := range t.Files.Stub {
+		stubFiles = append(stubFiles, stripTxtExtension(f))
+	}
+	testFiles := make([]string, 0, len(t.Files.Test))
+	for _, f := range t.Files.Test {
+		testFiles = append(testFiles, stripTxtExtension(f))
+	}
+
+	return fmt.Sprintf(`You are solving a coding task called "%s".
+
+TASK INFO:
+- Language:    %s
+- Tier:        %s
+- Difficulty:  %s
+- Description: %s
+
+FILES TO READ:
+- Stub/solution files: %s
+- Test files:          %s
 
 ENVIRONMENT:
-- Tests run automatically in a Docker container with %s toolchain pre-installed
-- You do NOT need to run tests yourself - just write the code
-- Do NOT search for or install language toolchains/SDKs
+- Tests run automatically in a Docker container with a %s toolchain pre-installed.
+- You do NOT need to run tests yourself.
+- Do NOT search for or install language toolchains/SDKs.
 
 YOUR TASK:
-1. Read the stub file (contains function signatures with panic()/todo!() placeholders)
-2. Read the test file to understand expected behavior and edge cases
-3. Implement all functions, replacing placeholders with working code
-4. Handle all edge cases shown in the tests
-5. Ensure thread-safety if the tests use concurrent operations
+1. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
+2. Read the visible test file(s) to understand expected behavior and edge cases.
+3. Implement the stub file(s), replacing placeholders with working code.
+4. Ensure your solution handles edge cases and performance constraints.
+5. Ensure thread-safety if the tests use concurrent operations.
+
+IMPORTANT:
+- There may be hidden tests that check additional edge cases for the same public API.
 
 RULES:
-- ONLY edit the stub/solution source file(s)
-- Do NOT modify test files or support files (go.mod, Cargo.toml, pubspec.yaml, build.zig)
-- You may add new helper source files if needed
-- Evaluation fails if you modify protected files`,
-		t.Name, t.Language, t.Language)
+- ONLY edit the stub/solution source file(s).
+- Do NOT modify test files or support files.
+- You may add new helper source files if needed.
+- Evaluation fails if you modify protected files.`,
+		t.Name, t.Language, t.Tier, t.Difficulty, t.Description,
+		strings.Join(stubFiles, ", "), strings.Join(testFiles, ", "),
+		t.Language)
 }
 
 func stripTxtExtension(filename string) string {
@@ -444,7 +686,10 @@ func init() {
 	evalCmd.Flags().StringVar(&evalModel, "model", "", "model to use (for gemini)")
 	evalCmd.Flags().StringVar(&evalTasks, "tasks", "", "comma-separated list of task slugs")
 	evalCmd.Flags().StringVar(&evalLang, "lang", "", "filter by language (go, rust, typescript)")
+	evalCmd.Flags().StringVar(&evalTier, "tier", "core", "filter by tier (core, extended, all)")
+	evalCmd.Flags().StringVar(&evalDifficulty, "difficulty", "", "filter by difficulty (comma-separated)")
 	evalCmd.Flags().IntVar(&evalTimeout, "timeout", 120, "timeout per task in seconds")
+	evalCmd.Flags().IntVar(&evalParallel, "parallel", 1, "run up to N tasks in parallel")
 	evalCmd.Flags().StringVar(&evalOutputDir, "output", "", "output directory for results")
 	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
 }

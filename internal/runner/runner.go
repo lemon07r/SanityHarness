@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/mount"
+
 	"github.com/lemon07r/sanityharness/internal/config"
 	errsummary "github.com/lemon07r/sanityharness/internal/errors"
 	"github.com/lemon07r/sanityharness/internal/result"
@@ -60,6 +62,68 @@ func (r *Runner) ResolveTaskRef(ref string) (*task.Task, error) {
 // Close cleans up runner resources.
 func (r *Runner) Close() error {
 	return r.docker.Close()
+}
+
+func (r *Runner) cacheMountsForLanguage(lang task.Language) ([]mount.Mount, error) {
+	// Cache directory lives alongside the workspace/session directories.
+	// It is safe to delete at any time; it only improves performance.
+	var mounts []mount.Mount
+
+	ensureMount := func(hostRel, containerPath string) error {
+		hostAbs, err := filepath.Abs(hostRel)
+		if err != nil {
+			return fmt.Errorf("resolving cache dir %s: %w", hostRel, err)
+		}
+		if err := os.MkdirAll(hostAbs, 0755); err != nil {
+			return fmt.Errorf("creating cache dir %s: %w", hostAbs, err)
+		}
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: hostAbs,
+			Target: containerPath,
+		})
+		return nil
+	}
+
+	switch lang {
+	case task.Go:
+		if err := ensureMount(filepath.Join(".sanity-cache", "go", "gocache"), "/tmp/sanity-go-build-cache"); err != nil {
+			return nil, err
+		}
+		if err := ensureMount(filepath.Join(".sanity-cache", "go", "gomodcache"), "/tmp/sanity-go-mod-cache"); err != nil {
+			return nil, err
+		}
+
+	case task.Rust:
+		if err := ensureMount(filepath.Join(".sanity-cache", "rust", "cargo-home"), "/tmp/sanity-cargo-home"); err != nil {
+			return nil, err
+		}
+		if err := ensureMount(filepath.Join(".sanity-cache", "rust", "cargo-target"), "/tmp/sanity-cargo-target"); err != nil {
+			return nil, err
+		}
+
+	case task.TypeScript:
+		if err := ensureMount(filepath.Join(".sanity-cache", "typescript", "npm-cache"), "/tmp/sanity-npm-cache"); err != nil {
+			return nil, err
+		}
+
+	case task.Kotlin:
+		if err := ensureMount(filepath.Join(".sanity-cache", "kotlin", "gradle-home"), "/tmp/sanity-gradle-home"); err != nil {
+			return nil, err
+		}
+
+	case task.Dart:
+		if err := ensureMount(filepath.Join(".sanity-cache", "dart", "pub-cache"), "/tmp/sanity-pub-cache"); err != nil {
+			return nil, err
+		}
+
+	case task.Zig:
+		if err := ensureMount(filepath.Join(".sanity-cache", "zig", "zig-cache"), "/tmp/.zig-cache"); err != nil {
+			return nil, err
+		}
+	}
+
+	return mounts, nil
 }
 
 // stripTxtExtension removes the .txt extension from embedded file names.
@@ -159,6 +223,11 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 	r.logger.Info("creating container", "workspace", workspaceDir)
 	containerUser := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	containerEnv := []string{"HOME=/tmp"}
+
+	cacheMounts, err := r.cacheMountsForLanguage(t.Language)
+	if err != nil {
+		return nil, err
+	}
 	switch t.Language {
 	case task.Rust:
 		containerEnv = append(containerEnv,
@@ -174,6 +243,14 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 		containerEnv = append(containerEnv,
 			"npm_config_cache=/tmp/sanity-npm-cache",
 		)
+	case task.Kotlin:
+		containerEnv = append(containerEnv,
+			"GRADLE_USER_HOME=/tmp/sanity-gradle-home",
+		)
+	case task.Dart:
+		containerEnv = append(containerEnv,
+			"PUB_CACHE=/tmp/sanity-pub-cache",
+		)
 	}
 	containerID, err := r.docker.CreateContainer(ctx, ContainerConfig{
 		Image:        imageName,
@@ -181,6 +258,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 		Name:         fmt.Sprintf("sanity-%s-%s-%d", t.Language, t.Slug, time.Now().UnixNano()),
 		User:         containerUser,
 		Env:          containerEnv,
+		Mounts:       cacheMounts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating container: %w", err)

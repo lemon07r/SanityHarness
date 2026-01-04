@@ -1,6 +1,7 @@
 slug = "reactive-cache"
 name = "Reactive Cache"
 language = "dart"
+tier = "extended"
 difficulty = "hard"
 description = "Implement a reactive cache with TTL, automatic refresh, and stream-based subscriptions"
 agent_timeout = 240

@@ -113,6 +113,7 @@ type ContainerConfig struct {
 	Name         string
 	User         string
 	Env          []string
+	Mounts       []mount.Mount
 }
 
 // CreateContainer creates a new container with the specified configuration.
@@ -126,13 +127,13 @@ func (d *DockerClient) CreateContainer(ctx context.Context, cfg ContainerConfig)
 	}
 
 	hostCfg := &container.HostConfig{
-		Mounts: []mount.Mount{
+		Mounts: append([]mount.Mount{
 			{
 				Type:   mount.TypeBind,
 				Source: cfg.WorkspaceDir,
 				Target: "/workspace",
 			},
-		},
+		}, cfg.Mounts...),
 	}
 
 	resp, err := d.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, cfg.Name)

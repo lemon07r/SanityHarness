@@ -225,32 +225,68 @@ sanity run bank-account --output all   # Default
 sanity show sessions/2024-12-30-143022-bank-account
 ```
 
-## Bundled Tasks (10 Total)
+## Bundled Tasks (22 Total)
 
-### Go (4 tasks)
+### Go (6 tasks)
 
-| Task | Difficulty | Core Signal |
-|------|------------|-------------|
-| `bank-account` | Hard | Concurrency, mutex discipline |
-| `dining-philosophers` | Hard | Deadlock avoidance, CSP |
-| `parallel-letter-frequency` | Hard | Goroutines, channels |
-| `react` | Hard | Change propagation, callbacks |
+| Task | Difficulty | Tier |
+|------|------------|------|
+| `go/bank-account` | Hard | core |
+| `go/dining-philosophers` | Hard | core |
+| `go/errgroup-limit` | Hard | core |
+| `go/parallel-letter-frequency` | Hard | core |
+| `go/react` | Hard | extended |
+| `go/singleflight` | Expert | extended |
 
-### Rust (4 tasks)
+### Rust (6 tasks)
 
-| Task | Difficulty | Core Signal |
-|------|------------|-------------|
-| `doubly-linked-list` | Expert | Unsafe pointers, memory model |
-| `circular-buffer` | Hard | Ownership transfer |
-| `macros` | Hard | Metaprogramming, syntax |
-| `parallel-letter-frequency` | Hard | Thread safety, lifetimes |
+| Task | Difficulty | Tier |
+|------|------------|------|
+| `rust/circular-buffer` | Hard | core |
+| `rust/doubly-linked-list` | Expert | extended |
+| `rust/generational-arena` | Hard | extended |
+| `rust/macros` | Hard | core |
+| `rust/parallel-letter-frequency` | Hard | core |
+| `rust/regex-lite` | Hard | core |
 
-### TypeScript (2 tasks)
+### TypeScript (4 tasks)
 
-| Task | Difficulty | Core Signal |
-|------|------------|-------------|
-| `forth` | Hard | Parsing, stack, type unions |
-| `react` | Hard | Generics, event emitters |
+| Task | Difficulty | Tier |
+|------|------------|------|
+| `typescript/forth` | Hard | core |
+| `typescript/glob` | Hard | core |
+| `typescript/promise-pool` | Hard | core |
+| `typescript/react` | Hard | extended |
+
+### Kotlin (2 tasks)
+
+| Task | Difficulty | Tier |
+|------|------------|------|
+| `kotlin/channel-multiplexer` | Hard | extended |
+| `kotlin/flow-processor` | Hard | extended |
+
+### Dart (2 tasks)
+
+| Task | Difficulty | Tier |
+|------|------------|------|
+| `dart/isolate-pool` | Hard | extended |
+| `dart/reactive-cache` | Hard | extended |
+
+### Zig (2 tasks)
+
+| Task | Difficulty | Tier |
+|------|------------|------|
+| `zig/arena-allocator` | Hard | extended |
+| `zig/comptime-json` | Expert | extended |
+
+## Task Authoring Guidelines
+
+### Hidden Tests Policy
+
+- Hidden tests must only rely on public APIs declared in the task stub (`[files].stub`).
+- If a new public function/type is required, add it to the stub (and update the task description) before asserting it in hidden tests.
+- Hidden tests should be deterministic: avoid wall-clock timing thresholds and goroutine/thread counting.
+- Hidden tests must not require solution-side interfaces/types that are defined only in the test file.
 
 ## Session Output Format
 

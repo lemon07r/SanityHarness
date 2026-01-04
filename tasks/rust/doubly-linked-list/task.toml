@@ -1,6 +1,7 @@
 slug = "doubly-linked-list"
 name = "Doubly Linked List"
 language = "rust"
+tier = "extended"
 difficulty = "expert"
 description = "Implement a doubly linked list using unsafe Rust and raw pointers"
 

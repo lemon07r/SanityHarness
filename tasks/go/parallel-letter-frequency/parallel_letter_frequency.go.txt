@@ -4,6 +4,13 @@ package letter
 // FreqMap is a map from rune to frequency count.
 type FreqMap map[rune]int
 
+// frequencyStartHook is used by hidden tests to deterministically verify that
+// ConcurrentFrequency processes multiple texts concurrently.
+//
+// If set (non-nil), Frequency must call it exactly once at the start of
+// execution. Do not remove this hook.
+var frequencyStartHook func()
+
 // Frequency counts the frequency of letters in a single text.
 func Frequency(text string) FreqMap {
 	panic("Please implement Frequency")
@@ -11,6 +18,8 @@ func Frequency(text string) FreqMap {
 
 // ConcurrentFrequency counts the frequency of letters in multiple texts
 // concurrently using goroutines.
+//
+// Hidden tests assume ConcurrentFrequency calls Frequency once per input text.
 func ConcurrentFrequency(texts []string) FreqMap {
 	panic("Please implement ConcurrentFrequency")
 }

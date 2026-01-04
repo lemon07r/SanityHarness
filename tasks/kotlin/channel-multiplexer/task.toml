@@ -1,6 +1,7 @@
 slug = "channel-multiplexer"
 name = "Channel Multiplexer"
 language = "kotlin"
+tier = "extended"
 difficulty = "hard"
 description = "Implement a channel multiplexer that combines multiple input channels into a single output with priority support"
 agent_timeout = 240

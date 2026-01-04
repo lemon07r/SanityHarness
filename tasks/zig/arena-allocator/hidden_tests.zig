@@ -1,66 +1,6 @@
 const std = @import("std");
 const Arena = @import("arena.zig").Arena;
 
-// Hidden tests require additional methods that aren't in the visible stub
-
-/// Extended Arena interface expected by hidden tests
-const ExtendedArena = struct {
-    /// Checkpoint represents a saved state of the arena
-    pub const Checkpoint = struct {
-        offset: usize,
-    };
-
-    /// Creates a child arena that allocates from the parent's remaining space.
-    /// The child must be deinitialized before the parent.
-    pub fn createChild(self: *Arena) ?Arena {
-        _ = self;
-        @panic("Hidden test requires createChild");
-    }
-
-    /// Allocates memory with specific alignment.
-    pub fn allocAligned(self: *Arena, comptime T: type, n: usize, alignment: u29) ?[]T {
-        _ = self;
-        _ = n;
-        _ = alignment;
-        @panic("Hidden test requires allocAligned");
-    }
-
-    /// Saves the current state of the arena.
-    pub fn saveState(self: *Arena) Checkpoint {
-        _ = self;
-        @panic("Hidden test requires saveState");
-    }
-
-    /// Restores the arena to a previously saved state.
-    /// All allocations made after the checkpoint are invalidated.
-    pub fn restoreState(self: *Arena, checkpoint: Checkpoint) void {
-        _ = self;
-        _ = checkpoint;
-        @panic("Hidden test requires restoreState");
-    }
-
-    /// Attempts to resize an existing allocation.
-    /// Returns the new slice if successful, null otherwise.
-    pub fn resize(self: *Arena, comptime T: type, old: []T, new_len: usize) ?[]T {
-        _ = self;
-        _ = old;
-        _ = new_len;
-        @panic("Hidden test requires resize");
-    }
-
-    /// Returns the number of bytes currently allocated.
-    pub fn bytesAllocated(self: *Arena) usize {
-        _ = self;
-        @panic("Hidden test requires bytesAllocated");
-    }
-
-    /// Returns the number of bytes remaining.
-    pub fn bytesRemaining(self: *Arena) usize {
-        _ = self;
-        @panic("Hidden test requires bytesRemaining");
-    }
-};
-
 test "child arena allocation" {
     var buffer: [1024]u8 = undefined;
     var parent = Arena.init(&buffer);
@@ -68,11 +8,6 @@ test "child arena allocation" {
 
     // Allocate some in parent
     _ = parent.alloc(u8, 100) orelse unreachable;
-
-    // Check if createChild exists
-    if (!@hasDecl(Arena, "createChild")) {
-        return error.SkipZigTest;
-    }
 
     var child = parent.createChild() orelse unreachable;
     defer child.deinit();
@@ -86,10 +21,6 @@ test "child arena isolation" {
     var buffer: [1024]u8 = undefined;
     var parent = Arena.init(&buffer);
     defer parent.deinit();
-
-    if (!@hasDecl(Arena, "createChild")) {
-        return error.SkipZigTest;
-    }
 
     var child = parent.createChild() orelse unreachable;
 
@@ -110,10 +41,6 @@ test "aligned allocation" {
     var arena = Arena.init(&buffer);
     defer arena.deinit();
 
-    if (!@hasDecl(Arena, "allocAligned")) {
-        return error.SkipZigTest;
-    }
-
     // Allocate with 64-byte alignment
     const aligned = arena.allocAligned(u8, 100, 64) orelse unreachable;
     try std.testing.expectEqual(@as(usize, 0), @intFromPtr(aligned.ptr) % 64);
@@ -127,10 +54,6 @@ test "checkpoint save and restore" {
     var buffer: [1024]u8 = undefined;
     var arena = Arena.init(&buffer);
     defer arena.deinit();
-
-    if (!@hasDecl(Arena, "saveState") or !@hasDecl(Arena, "restoreState")) {
-        return error.SkipZigTest;
-    }
 
     // Allocate some memory
     _ = arena.alloc(u8, 100) orelse unreachable;
@@ -155,10 +78,6 @@ test "multiple checkpoints" {
     var arena = Arena.init(&buffer);
     defer arena.deinit();
 
-    if (!@hasDecl(Arena, "saveState") or !@hasDecl(Arena, "restoreState")) {
-        return error.SkipZigTest;
-    }
-
     const cp1 = arena.saveState();
     _ = arena.alloc(u8, 100) orelse unreachable;
 
@@ -166,6 +85,7 @@ test "multiple checkpoints" {
     _ = arena.alloc(u8, 200) orelse unreachable;
 
     const cp3 = arena.saveState();
+    _ = cp3;
     _ = arena.alloc(u8, 300) orelse unreachable;
 
     // Restore to cp2
@@ -184,10 +104,6 @@ test "resize in place" {
     var arena = Arena.init(&buffer);
     defer arena.deinit();
 
-    if (!@hasDecl(Arena, "resize")) {
-        return error.SkipZigTest;
-    }
-
     // Allocate
     const original = arena.alloc(u8, 100) orelse unreachable;
 
@@ -205,10 +121,6 @@ test "resize failure when not last" {
     var arena = Arena.init(&buffer);
     defer arena.deinit();
 
-    if (!@hasDecl(Arena, "resize")) {
-        return error.SkipZigTest;
-    }
-
     const first = arena.alloc(u8, 100) orelse unreachable;
     _ = arena.alloc(u8, 100) orelse unreachable; // Another allocation
 
@@ -221,10 +133,6 @@ test "bytes allocated tracking" {
     var buffer: [1024]u8 = undefined;
     var arena = Arena.init(&buffer);
     defer arena.deinit();
-
-    if (!@hasDecl(Arena, "bytesAllocated")) {
-        return error.SkipZigTest;
-    }
 
     try std.testing.expectEqual(@as(usize, 0), arena.bytesAllocated());
 
@@ -240,10 +148,6 @@ test "bytes remaining tracking" {
     var arena = Arena.init(&buffer);
     defer arena.deinit();
 
-    if (!@hasDecl(Arena, "bytesRemaining")) {
-        return error.SkipZigTest;
-    }
-
     const initial = arena.bytesRemaining();
     try std.testing.expect(initial <= 1024);
 
@@ -255,10 +159,6 @@ test "nested child arenas" {
     var buffer: [4096]u8 = undefined;
     var root = Arena.init(&buffer);
     defer root.deinit();
-
-    if (!@hasDecl(Arena, "createChild")) {
-        return error.SkipZigTest;
-    }
 
     var child1 = root.createChild() orelse unreachable;
     _ = child1.alloc(u8, 500) orelse unreachable;

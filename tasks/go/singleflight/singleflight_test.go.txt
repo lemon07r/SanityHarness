@@ -139,3 +139,25 @@ func TestDoDifferentKeysCanRunConcurrently(t *testing.T) {
 	close(release)
 	wg.Wait()
 }
+
+func TestForgetAllowsNextCallToExecute(t *testing.T) {
+	var g Group
+
+	var calls atomic.Int32
+
+	_, _, _ = g.Do("k", func() (interface{}, error) {
+		calls.Add(1)
+		return 1, nil
+	})
+
+	g.Forget("k")
+
+	_, _, _ = g.Do("k", func() (interface{}, error) {
+		calls.Add(1)
+		return 2, nil
+	})
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("fn calls = %d, want 2", got)
+	}
+}

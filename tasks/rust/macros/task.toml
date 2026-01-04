@@ -1,6 +1,7 @@
 slug = "macros"
 name = "Macros"
 language = "rust"
+tier = "core"
 difficulty = "hard"
 description = "Create Rust declarative macros for common patterns"
 

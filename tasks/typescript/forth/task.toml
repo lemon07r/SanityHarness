@@ -1,6 +1,7 @@
 slug = "forth"
 name = "Forth"
 language = "typescript"
+tier = "core"
 difficulty = "hard"
 description = "Implement a Forth-like stack-based language interpreter"
 

@@ -1,6 +1,7 @@
 slug = "generational-arena"
 name = "Generational Arena"
 language = "rust"
+tier = "extended"
 difficulty = "hard"
 description = "Implement an arena allocator with generational handles to prevent use-after-free"
 

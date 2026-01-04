@@ -11,6 +11,9 @@ A lightweight evaluation harness for coding agents that runs "Compact Hard Probl
 - **Error Summarization**: Language-specific error extraction
 - **Hidden Tests**: Tasks can include hidden tests only applied during `sanity eval`
 - **Eval Integrity Checks**: Agents cannot modify test/support files
+- **Task Metadata & Filtering**: Tier (`core`/`extended`) and difficulty filtering for `list` and `eval`
+- **Parallel Eval**: Run multiple tasks concurrently via `--parallel`
+- **Persistent Caches**: Optional `.sanity-cache/` mounted into containers to speed up builds
 
 ## Quick Start
 
@@ -40,7 +43,9 @@ make build
 ```bash
 ./sanity list
 ./sanity list --json
-./sanity list --lang go
+./sanity list --language go
+./sanity list --tier core
+./sanity list --difficulty hard
 ```
 
 #### Initialize a Workspace
@@ -85,6 +90,8 @@ make build
 ./sanity eval --agent gemini --model gemini-3-pro-preview
 ./sanity eval --agent opencode
 ./sanity eval --agent gemini --lang go
+./sanity eval --agent gemini --tier all --parallel 4
+./sanity eval --agent gemini --difficulty hard,expert
 ./sanity eval --agent gemini --tasks go/react,typescript/react
 ./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
 ```
@@ -118,55 +125,55 @@ For tasks that exist in multiple languages (e.g., `react` exists in both Go and 
 
 ### Go (6 tasks)
 
-| Task | Description | Difficulty | Hidden Tests |
-|------|-------------|------------|--------------|
-| `bank-account` | Concurrent bank account with mutex synchronization | Hard | No |
-| `dining-philosophers` | Classic concurrency problem solving | Hard | No |
-| `errgroup-limit` | Bounded concurrency group that stops on first error | Hard | Yes |
-| `parallel-letter-frequency` | Parallel text processing with goroutines | Hard | No |
-| `react` | Reactive spreadsheet cells with callbacks | Hard | No |
-| `singleflight` | Deduplicate concurrent calls by key | Expert | Yes |
+| Task | Description | Difficulty | Tier | Hidden Tests |
+|------|-------------|------------|------|-------------|
+| `bank-account` | Concurrent bank account with mutex synchronization | Hard | core | No |
+| `dining-philosophers` | Classic concurrency problem solving | Hard | core | No |
+| `errgroup-limit` | Bounded concurrency group that stops on first error | Hard | core | Yes |
+| `parallel-letter-frequency` | Parallel text processing with goroutines | Hard | core | Yes |
+| `react` | Reactive spreadsheet cells with callbacks | Hard | extended | Yes |
+| `singleflight` | Deduplicate concurrent calls by key | Expert | extended | Yes |
 
 ### Rust (6 tasks)
 
-| Task | Description | Difficulty | Hidden Tests |
-|------|-------------|------------|--------------|
-| `circular-buffer` | Generic circular buffer with ownership | Hard | No |
-| `doubly-linked-list` | Unsafe Rust linked list implementation | Expert | No |
-| `generational-arena` | Arena allocator with generational handles | Hard | Yes |
-| `macros` | Declarative macro creation | Hard | Yes |
-| `parallel-letter-frequency` | Multi-threaded text processing | Hard | No |
-| `regex-lite` | Regex matching for `.`, `*` (full-string match) | Hard | Yes |
+| Task | Description | Difficulty | Tier | Hidden Tests |
+|------|-------------|------------|------|-------------|
+| `circular-buffer` | Generic circular buffer with ownership | Hard | core | No |
+| `doubly-linked-list` | Unsafe Rust linked list implementation | Expert | extended | No |
+| `generational-arena` | Arena allocator with generational handles | Hard | extended | Yes |
+| `macros` | Declarative macro creation | Hard | core | Yes |
+| `parallel-letter-frequency` | Multi-threaded text processing | Hard | core | Yes |
+| `regex-lite` | Regex matching for `.`, `*` (full-string match) | Hard | core | Yes |
 
 ### TypeScript (4 tasks)
 
-| Task | Description | Difficulty | Hidden Tests |
-|------|-------------|------------|--------------|
-| `forth` | Stack-based language interpreter | Hard | Yes |
-| `glob` | Glob pattern matching (`*`, `?`, escaping) | Hard | Yes |
-| `promise-pool` | Promise pool with bounded concurrency | Hard | Yes |
-| `react` | Reactive cell system with dependencies | Hard | Yes |
+| Task | Description | Difficulty | Tier | Hidden Tests |
+|------|-------------|------------|------|-------------|
+| `forth` | Stack-based language interpreter | Hard | core | Yes |
+| `glob` | Glob pattern matching (`*`, `?`, escaping) | Hard | core | Yes |
+| `promise-pool` | Promise pool with bounded concurrency | Hard | core | Yes |
+| `react` | Reactive cell system with dependencies | Hard | extended | Yes |
 
 ### Kotlin (2 tasks)
 
-| Task | Description | Difficulty | Hidden Tests |
-|------|-------------|------------|--------------|
-| `channel-multiplexer` | Combine multiple channels with priority support | Hard | Yes |
-| `flow-processor` | Composable Kotlin Flow processor with operators | Hard | Yes |
+| Task | Description | Difficulty | Tier | Hidden Tests |
+|------|-------------|------------|------|-------------|
+| `channel-multiplexer` | Combine multiple channels with priority support | Hard | extended | Yes |
+| `flow-processor` | Composable Kotlin Flow processor with operators | Hard | extended | Yes |
 
 ### Dart (2 tasks)
 
-| Task | Description | Difficulty | Hidden Tests |
-|------|-------------|------------|--------------|
-| `isolate-pool` | Worker pool using Dart isolates | Hard | Yes |
-| `reactive-cache` | Reactive cache with TTL and stream subscriptions | Hard | Yes |
+| Task | Description | Difficulty | Tier | Hidden Tests |
+|------|-------------|------------|------|-------------|
+| `isolate-pool` | Worker pool using Dart isolates | Hard | extended | Yes |
+| `reactive-cache` | Reactive cache with TTL and stream subscriptions | Hard | extended | Yes |
 
 ### Zig (2 tasks)
 
-| Task | Description | Difficulty | Hidden Tests |
-|------|-------------|------------|--------------|
-| `arena-allocator` | Custom arena allocator with child arenas | Hard | Yes |
-| `comptime-json` | Compile-time JSON schema parsing | Expert | Yes |
+| Task | Description | Difficulty | Tier | Hidden Tests |
+|------|-------------|------------|------|-------------|
+| `arena-allocator` | Custom arena allocator with child arenas | Hard | extended | Yes |
+| `comptime-json` | Compile-time JSON schema parsing | Expert | extended | Yes |
 
 ## Configuration
 
@@ -216,7 +223,7 @@ sanityharness/
 1. **Container Strategy**: Containers run `sleep infinity` and commands execute via `docker exec` for fast reuse
 2. **Workspace Mounting**: Your code is mounted at `/workspace` in the container
 3. **User Permissions**: Runs as your host UID:GID to avoid root-owned files
-4. **Cache Isolation**: Language caches redirect to `/tmp` to keep workspaces clean
+4. **Cache Isolation + Persistence**: Language caches redirect to `/tmp` and are mounted from `.sanity-cache/` for faster repeated runs
 5. **Embedded Tasks**: Task files are compiled into the binary for zero-dependency distribution
 
 ## Session Output

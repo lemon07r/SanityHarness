@@ -1,6 +1,7 @@
 slug = "singleflight"
 name = "Singleflight"
 language = "go"
+tier = "extended"
 difficulty = "expert"
 description = "Deduplicate concurrent calls by key so only one execution is in-flight per key"
 agent_timeout = 240

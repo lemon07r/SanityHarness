@@ -1,6 +1,7 @@
 slug = "isolate-pool"
 name = "Isolate Pool"
 language = "dart"
+tier = "extended"
 difficulty = "hard"
 description = "Implement a worker pool using Dart isolates for parallel task execution"
 

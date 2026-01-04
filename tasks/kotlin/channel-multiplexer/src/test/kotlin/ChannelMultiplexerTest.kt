@@ -148,4 +148,38 @@ class ChannelMultiplexerTest {
         assertEquals(setOf(1, 2), received.toSet())
         mux.cancel()
     }
+
+    @Test
+    fun `priority channel is received first when both have buffered values`() = runTest {
+        val mux = ChannelMultiplexer<String>(this)
+        val low = Channel<String>(Channel.UNLIMITED)
+        val high = Channel<String>(Channel.UNLIMITED)
+
+        mux.addChannel("low", low)
+        mux.addPriorityChannel("high", high, priority = 10)
+
+        low.send("low1")
+        high.send("high1")
+
+        val first = mux.output.receive()
+        assertEquals("high1", first)
+
+        mux.cancel()
+    }
+
+    @Test
+    fun `removeChannel stops forwarding and updates count`() = runTest {
+        val mux = ChannelMultiplexer<Int>(this)
+        val ch1 = Channel<Int>(Channel.UNLIMITED)
+        val ch2 = Channel<Int>(Channel.UNLIMITED)
+
+        mux.addChannel("a", ch1)
+        mux.addChannel("b", ch2)
+
+        assertEquals(2, mux.getActiveChannelCount())
+        assertTrue(mux.removeChannel("a"))
+        assertEquals(1, mux.getActiveChannelCount())
+
+        mux.cancel()
+    }
 }

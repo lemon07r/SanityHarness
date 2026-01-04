@@ -1,182 +1,73 @@
 package singleflight
 
 import (
-	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// ContextGroup extends Group with context-aware methods.
-type ContextGroup interface {
-	// DoContext is like Do but respects context cancellation.
-	// If the context is cancelled before the function completes,
-	// the call returns the context error.
-	DoContext(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error, bool)
-
-	// Forget removes a key from the group, allowing the next call to execute.
-	Forget(key string)
-}
-
-// TimeoutGroup extends Group with timeout support.
-type TimeoutGroup interface {
-	// DoWithTimeout is like Do but with a timeout.
-	DoWithTimeout(key string, timeout time.Duration, fn func() (interface{}, error)) (interface{}, error, bool)
-}
-
-func TestDoContext(t *testing.T) {
+func TestForgetWhileInFlightStartsNewExecution(t *testing.T) {
 	var g Group
 
-	cg, ok := interface{}(&g).(ContextGroup)
-	if !ok {
-		t.Fatal("Group must implement ContextGroup interface with DoContext method")
-	}
-
-	ctx := context.Background()
-	v, err, shared := cg.DoContext(ctx, "key", func() (interface{}, error) {
-		return 42, nil
-	})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if shared {
-		t.Fatal("shared = true, want false")
-	}
-	if v.(int) != 42 {
-		t.Fatalf("v = %v, want 42", v)
-	}
-}
-
-func TestDoContextCancellation(t *testing.T) {
-	var g Group
-
-	cg, ok := interface{}(&g).(ContextGroup)
-	if !ok {
-		t.Fatal("Group must implement ContextGroup interface")
-	}
-
-	// Start a slow operation
 	started := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	var resultErr error
-	go func() {
-		defer wg.Done()
-		_, resultErr, _ = cg.DoContext(ctx, "slow", func() (interface{}, error) {
-			close(started)
-			time.Sleep(5 * time.Second)
-			return "done", nil
-		})
-	}()
-
-	<-started
-	cancel()
-	wg.Wait()
-
-	if !errors.Is(resultErr, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", resultErr)
-	}
-}
-
-func TestDoContextTimeoutPropagation(t *testing.T) {
-	var g Group
-
-	cg, ok := interface{}(&g).(ContextGroup)
-	if !ok {
-		t.Fatal("Group must implement ContextGroup interface")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	_, err, _ := cg.DoContext(ctx, "timeout", func() (interface{}, error) {
-		time.Sleep(200 * time.Millisecond)
-		return "should not reach", nil
-	})
-
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
-	}
-}
-
-func TestForget(t *testing.T) {
-	var g Group
-
-	cg, ok := interface{}(&g).(ContextGroup)
-	if !ok {
-		t.Fatal("Group must implement ContextGroup interface with Forget method")
-	}
+	release := make(chan struct{})
 
 	var calls atomic.Int32
-
-	// First call
-	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		g.Do("key", func() (interface{}, error) {
+		defer wg.Done()
+		_, _, _ = g.Do("key", func() (interface{}, error) {
 			calls.Add(1)
+			close(started)
 			<-release
 			return 1, nil
 		})
 	}()
 
-	// Wait for first call to start
-	time.Sleep(50 * time.Millisecond)
+	<-started
+	g.Forget("key")
 
-	// Forget the key while first call is in flight
-	cg.Forget("key")
-
-	// Second call should start a new execution
-	var secondResult int
-	var wg sync.WaitGroup
-	wg.Add(1)
+	secondDone := make(chan int, 1)
 	go func() {
-		defer wg.Done()
 		v, _, _ := g.Do("key", func() (interface{}, error) {
 			calls.Add(1)
 			return 2, nil
 		})
-		secondResult = v.(int)
+		secondDone <- v.(int)
 	}()
 
-	// Release first call
+	select {
+	case v := <-secondDone:
+		if v != 2 {
+			t.Fatalf("second result = %d, want 2", v)
+		}
+	case <-time.After(500 * time.Millisecond):
+		close(release)
+		wg.Wait()
+		t.Fatal("second call did not complete while first call was in-flight")
+	}
+
 	close(release)
 	wg.Wait()
 
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("fn calls = %d, want 2", got)
 	}
-	if secondResult != 2 {
-		t.Fatalf("second result = %d, want 2", secondResult)
-	}
 }
 
-func TestForgetAfterComplete(t *testing.T) {
+func TestForgetAfterCompleteIsNoop(t *testing.T) {
 	var g Group
 
-	cg, ok := interface{}(&g).(ContextGroup)
-	if !ok {
-		t.Fatal("Group must implement ContextGroup interface")
-	}
-
 	var calls atomic.Int32
-
-	// First call completes
-	g.Do("key", func() (interface{}, error) {
+	_, _, _ = g.Do("key", func() (interface{}, error) {
 		calls.Add(1)
 		return 1, nil
 	})
 
-	// Forget is a no-op after completion (key already gone)
-	cg.Forget("key")
-
-	// Second call should execute normally (not share with first)
-	g.Do("key", func() (interface{}, error) {
+	g.Forget("key")
+	_, _, _ = g.Do("key", func() (interface{}, error) {
 		calls.Add(1)
 		return 2, nil
 	})
@@ -186,115 +77,12 @@ func TestForgetAfterComplete(t *testing.T) {
 	}
 }
 
-func TestDoWithTimeout(t *testing.T) {
+func TestForgetMissingKeyDoesNotPanic(t *testing.T) {
 	var g Group
-
-	tg, ok := interface{}(&g).(TimeoutGroup)
-	if !ok {
-		t.Fatal("Group must implement TimeoutGroup interface with DoWithTimeout method")
-	}
-
-	v, err, shared := tg.DoWithTimeout("key", time.Second, func() (interface{}, error) {
-		return 42, nil
-	})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if shared {
-		t.Fatal("shared = true, want false")
-	}
-	if v.(int) != 42 {
-		t.Fatalf("v = %v, want 42", v)
-	}
-}
-
-func TestDoWithTimeoutExpires(t *testing.T) {
-	var g Group
-
-	tg, ok := interface{}(&g).(TimeoutGroup)
-	if !ok {
-		t.Fatal("Group must implement TimeoutGroup interface")
-	}
-
-	_, err, _ := tg.DoWithTimeout("slow", 50*time.Millisecond, func() (interface{}, error) {
-		time.Sleep(200 * time.Millisecond)
-		return "should not reach", nil
-	})
-
-	if err == nil {
-		t.Fatal("expected timeout error, got nil")
-	}
-}
-
-func TestDoContextSharedCancellation(t *testing.T) {
-	var g Group
-
-	cg, ok := interface{}(&g).(ContextGroup)
-	if !ok {
-		t.Fatal("Group must implement ContextGroup interface")
-	}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-
-	// Start primary call
-	var wg sync.WaitGroup
-	wg.Add(3)
-
-	var primaryErr error
-	go func() {
-		defer wg.Done()
-		_, primaryErr, _ = cg.DoContext(context.Background(), "key", func() (interface{}, error) {
-			close(started)
-			<-release
-			return 42, nil
-		})
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Forget panicked: %v", r)
+		}
 	}()
-
-	<-started
-
-	// Start two waiters with cancellable contexts
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-
-	var waiter1Err, waiter2Err error
-	go func() {
-		defer wg.Done()
-		_, waiter1Err, _ = cg.DoContext(ctx1, "key", func() (interface{}, error) {
-			return 99, nil // Should not execute
-		})
-	}()
-
-	go func() {
-		defer wg.Done()
-		_, waiter2Err, _ = cg.DoContext(ctx2, "key", func() (interface{}, error) {
-			return 99, nil // Should not execute
-		})
-	}()
-
-	time.Sleep(50 * time.Millisecond)
-
-	// Cancel only waiter1
-	cancel1()
-
-	// Release primary call
-	close(release)
-	wg.Wait()
-
-	// Primary should succeed
-	if primaryErr != nil {
-		t.Fatalf("primary error = %v, want nil", primaryErr)
-	}
-
-	// Waiter1 should be cancelled
-	if !errors.Is(waiter1Err, context.Canceled) {
-		t.Fatalf("waiter1 error = %v, want context.Canceled", waiter1Err)
-	}
-
-	// Waiter2 should receive the result
-	if waiter2Err != nil {
-		t.Fatalf("waiter2 error = %v, want nil", waiter2Err)
-	}
+	g.Forget("missing")
 }

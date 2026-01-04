@@ -1,6 +1,7 @@
 slug = "react"
 name = "React (Reactive Cells)"
 language = "typescript"
+tier = "extended"
 difficulty = "hard"
 description = "Implement reactive spreadsheet-like cells with dependencies and callbacks"
 

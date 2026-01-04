@@ -1,6 +1,7 @@
 slug = "arena-allocator"
 name = "Arena Allocator"
 language = "zig"
+tier = "extended"
 difficulty = "hard"
 description = "Implement a custom arena allocator with child arenas, alignment, and checkpoint/restore"
 

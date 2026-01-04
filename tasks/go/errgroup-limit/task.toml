@@ -1,6 +1,7 @@
 slug = "errgroup-limit"
 name = "ErrGroup (Concurrency Limit)"
 language = "go"
+tier = "core"
 difficulty = "hard"
 description = "Run functions concurrently with a max concurrency limit and stop scheduling on first error"
 

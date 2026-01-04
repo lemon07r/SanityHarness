@@ -1,6 +1,7 @@
 slug = "parallel-letter-frequency"
 name = "Parallel Letter Frequency"
 language = "go"
+tier = "core"
 difficulty = "hard"
 description = "Count letter frequencies using goroutines and channels"
 

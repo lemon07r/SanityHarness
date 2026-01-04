@@ -54,6 +54,44 @@ class ChannelMultiplexer<T>(
     }
 
     /**
+     * Add an input channel with an explicit priority.
+     *
+     * Higher priority channels should be selected first when multiple channels
+     * have buffered values available.
+     *
+     * @throws IllegalArgumentException if a channel with this name already exists
+     * @throws IllegalArgumentException if priority is negative
+     */
+    fun addPriorityChannel(name: String, channel: ReceiveChannel<T>, priority: Int) {
+        TODO("Implement addPriorityChannel")
+    }
+
+    /**
+     * Remove a channel by name.
+     *
+     * Returns true if the channel existed and was removed.
+     */
+    fun removeChannel(name: String): Boolean {
+        TODO("Implement removeChannel")
+    }
+
+    /**
+     * Returns the number of currently active channels.
+     */
+    fun getActiveChannelCount(): Int {
+        TODO("Implement getActiveChannelCount")
+    }
+
+    /**
+     * Configure the output channel buffer size.
+     *
+     * Must be called before consuming from [output].
+     */
+    fun setBufferSize(size: Int) {
+        TODO("Implement setBufferSize")
+    }
+
+    /**
      * Cancel the multiplexer, stopping all input processing and closing the output channel.
      */
     fun cancel() {
@@ -103,6 +141,37 @@ class TaggedChannelMultiplexer<T>(
      */
     fun addChannel(name: String, channel: ReceiveChannel<T>) {
         TODO("Implement addChannel")
+    }
+
+    /**
+     * Add an input channel with an explicit priority.
+     *
+     * Higher priority channels should be selected first when multiple channels
+     * have buffered values available.
+     */
+    fun addPriorityChannel(name: String, channel: ReceiveChannel<T>, priority: Int) {
+        TODO("Implement addPriorityChannel")
+    }
+
+    /**
+     * Remove a channel by name.
+     */
+    fun removeChannel(name: String): Boolean {
+        TODO("Implement removeChannel")
+    }
+
+    /**
+     * Returns the number of currently active channels.
+     */
+    fun getActiveChannelCount(): Int {
+        TODO("Implement getActiveChannelCount")
+    }
+
+    /**
+     * Configure the output channel buffer size.
+     */
+    fun setBufferSize(size: Int) {
+        TODO("Implement setBufferSize")
     }
 
     /**

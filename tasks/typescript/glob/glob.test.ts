@@ -23,6 +23,18 @@ describe("matchGlob", () => {
     assert.strictEqual(matchGlob("?", ""), false);
   });
 
+  it("supports escaping '*' and '?'", () => {
+    assert.strictEqual(matchGlob("\\*", "*"), true);
+    assert.strictEqual(matchGlob("\\?", "?"), true);
+    assert.strictEqual(matchGlob("a\\*b", "a*b"), true);
+    assert.strictEqual(matchGlob("a\\?b", "a?b"), true);
+  });
+
+  it("escape treats the next character literally", () => {
+    assert.strictEqual(matchGlob("\\\\", "\\"), true);
+    assert.strictEqual(matchGlob("\\\\a", "\\a"), true);
+  });
+
   it("handles empty pattern and input", () => {
     assert.strictEqual(matchGlob("", ""), true);
     assert.strictEqual(matchGlob("", "a"), false);

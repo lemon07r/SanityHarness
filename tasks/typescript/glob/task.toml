@@ -1,6 +1,7 @@
 slug = "glob"
 name = "Glob Matcher"
 language = "typescript"
+tier = "core"
 difficulty = "hard"
 description = "Match strings against glob patterns supporting '*', '?', and escaping"
 

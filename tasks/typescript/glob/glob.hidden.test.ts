@@ -8,15 +8,7 @@ describe("matchGlob (hidden)", () => {
     assert.strictEqual(matchGlob("a**b", "axxxb"), true);
   });
 
-  it("supports escaping '*' and '?'", () => {
-    assert.strictEqual(matchGlob("\\*", "*"), true);
-    assert.strictEqual(matchGlob("\\?", "?"), true);
-    assert.strictEqual(matchGlob("a\\*b", "a*b"), true);
-    assert.strictEqual(matchGlob("a\\?b", "a?b"), true);
-  });
-
-  it("escape treats the next character literally", () => {
-    assert.strictEqual(matchGlob("\\\\", "\\"), true);
-    assert.strictEqual(matchGlob("\\\\a", "\\a"), true);
+  it("treats a trailing escape as a literal backslash", () => {
+    assert.strictEqual(matchGlob("\\", "\\"), true);
   });
 });

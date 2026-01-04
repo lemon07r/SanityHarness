@@ -32,6 +32,7 @@ type Task struct {
 	Slug         string     `toml:"slug"`
 	Name         string     `toml:"name"`
 	Language     Language   `toml:"language"`
+	Tier         string     `toml:"tier,omitempty"`
 	Difficulty   string     `toml:"difficulty"`
 	Description  string     `toml:"description"`
 	Timeout      int        `toml:"timeout,omitempty"`
@@ -179,6 +180,9 @@ func (l *Loader) loadFromEmbed() ([]*Task, error) {
 			if err := toml.Unmarshal(data, &task); err != nil {
 				return nil, fmt.Errorf("parsing %s: %w", taskPath, err)
 			}
+			if task.Tier == "" {
+				task.Tier = "core"
+			}
 
 			tasks = append(tasks, &task)
 		}
@@ -215,6 +219,9 @@ func (l *Loader) loadFromDir(dir string) ([]*Task, error) {
 			var task Task
 			if _, err := toml.DecodeFile(taskPath, &task); err != nil {
 				continue
+			}
+			if task.Tier == "" {
+				task.Tier = "core"
 			}
 
 			tasks = append(tasks, &task)
