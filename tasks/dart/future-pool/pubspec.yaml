@@ -1,0 +1,9 @@
+name: future_pool
+description: Run async tasks with a concurrency limit while preserving order
+version: 1.0.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dev_dependencies:
+  test: ^1.24.0

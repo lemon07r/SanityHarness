@@ -1,0 +1,17 @@
+slug = "small-vector"
+name = "Small Vector"
+language = "zig"
+tier = "extended"
+difficulty = "hard"
+description = "Implement a SmallVec with inline storage and heap growth beyond a fixed capacity"
+agent_timeout = 180
+
+[files]
+stub = ["small_vector.zig"]
+test = ["tests.zig"]
+hidden_test = ["hidden_tests.zig"]
+support = ["build.zig", "build.zig.zon"]
+
+[validation]
+command = "zig"
+args = ["build", "test"]

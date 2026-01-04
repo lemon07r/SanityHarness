@@ -69,18 +69,22 @@ eval-results/
 /forth/
 /promise-pool/
 /glob/
+/csv-lite/
 
 # Kotlin tasks
 /flow-processor/
 /channel-multiplexer/
+/lru-cache/
 
 # Dart tasks
 /isolate-pool/
 /reactive-cache/
+/future-pool/
 
 # Zig tasks
 /arena-allocator/
 /comptime-json/
+/small-vector/
 
 # Pampax semantic search index
 .pampa/

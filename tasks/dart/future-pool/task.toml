@@ -1,0 +1,17 @@
+slug = "future-pool"
+name = "Future Pool"
+language = "dart"
+tier = "extended"
+difficulty = "hard"
+description = "Run async tasks with a concurrency limit, preserving result order and failing fast"
+agent_timeout = 180
+
+[files]
+stub = ["lib/future_pool.dart"]
+test = ["test/future_pool_test.dart"]
+hidden_test = ["test/future_pool_hidden_test.dart"]
+support = ["pubspec.yaml"]
+
+[validation]
+command = "dart"
+args = ["test"]

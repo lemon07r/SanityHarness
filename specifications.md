@@ -225,7 +225,7 @@ sanity run bank-account --output all   # Default
 sanity show sessions/2024-12-30-143022-bank-account
 ```
 
-## Bundled Tasks (22 Total)
+## Bundled Tasks (26 Total)
 
 ### Go (6 tasks)
 
@@ -249,35 +249,39 @@ sanity show sessions/2024-12-30-143022-bank-account
 | `rust/parallel-letter-frequency` | Hard | core |
 | `rust/regex-lite` | Hard | core |
 
-### TypeScript (4 tasks)
+### TypeScript (5 tasks)
 
 | Task | Difficulty | Tier |
 |------|------------|------|
 | `typescript/forth` | Hard | core |
 | `typescript/glob` | Hard | core |
 | `typescript/promise-pool` | Hard | core |
+| `typescript/csv-lite` | Hard | core |
 | `typescript/react` | Hard | extended |
 
-### Kotlin (2 tasks)
+### Kotlin (3 tasks)
 
 | Task | Difficulty | Tier |
 |------|------------|------|
 | `kotlin/channel-multiplexer` | Hard | extended |
 | `kotlin/flow-processor` | Hard | extended |
+| `kotlin/lru-cache` | Hard | extended |
 
-### Dart (2 tasks)
+### Dart (3 tasks)
 
 | Task | Difficulty | Tier |
 |------|------------|------|
 | `dart/isolate-pool` | Hard | extended |
 | `dart/reactive-cache` | Hard | extended |
+| `dart/future-pool` | Hard | extended |
 
-### Zig (2 tasks)
+### Zig (3 tasks)
 
 | Task | Difficulty | Tier |
 |------|------------|------|
 | `zig/arena-allocator` | Hard | extended |
 | `zig/comptime-json` | Expert | extended |
+| `zig/small-vector` | Hard | extended |
 
 ## Task Authoring Guidelines
 

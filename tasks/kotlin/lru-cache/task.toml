@@ -1,0 +1,17 @@
+slug = "lru-cache"
+name = "LRU Cache"
+language = "kotlin"
+tier = "extended"
+difficulty = "hard"
+description = "Implement a fixed-capacity LRU cache with O(1) get/put and stable recency ordering"
+agent_timeout = 180
+
+[files]
+stub = ["src/main/kotlin/LruCache.kt"]
+test = ["src/test/kotlin/LruCacheTest.kt"]
+hidden_test = ["src/test/kotlin/LruCacheHiddenTest.kt"]
+support = ["build.gradle.kts", "settings.gradle.kts"]
+
+[validation]
+command = "gradle"
+args = ["test", "--no-daemon", "-q"]

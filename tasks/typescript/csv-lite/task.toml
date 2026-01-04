@@ -1,0 +1,16 @@
+slug = "csv-lite"
+name = "CSV Lite"
+language = "typescript"
+tier = "core"
+difficulty = "hard"
+description = "Parse CSV from a stream, supporting quotes, escapes, and CRLF"
+
+[files]
+stub = ["csv.ts"]
+test = ["csv.test.ts"]
+hidden_test = ["csv.hidden.test.ts"]
+support = []
+
+[validation]
+command = "npx"
+args = ["tsx", "--test", "csv.test.ts"]

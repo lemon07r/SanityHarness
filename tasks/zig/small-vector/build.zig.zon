@@ -1,0 +1,11 @@
+.{
+    .name = "small-vector",
+    .version = "0.0.1",
+    .paths = .{
+        "small_vector.zig",
+        "tests.zig",
+        "hidden_tests.zig",
+        "build.zig",
+        "build.zig.zon",
+    },
+}

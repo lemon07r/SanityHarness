@@ -5,7 +5,7 @@ A lightweight evaluation harness for coding agents that runs "Compact Hard Probl
 ## Features
 
 - **Isolated Execution**: Each task runs in a Docker container
-- **Multi-Language Support**: Go, Rust, TypeScript, Kotlin, Dart, and Zig tasks (22 total)
+- **Multi-Language Support**: Go, Rust, TypeScript, Kotlin, Dart, and Zig tasks (26 total)
 - **Watch Mode**: Automatically re-run tests when files change
 - **Session Tracking**: JSON and Markdown reports with full audit trail
 - **Error Summarization**: Language-specific error extraction
@@ -145,35 +145,39 @@ For tasks that exist in multiple languages (e.g., `react` exists in both Go and 
 | `parallel-letter-frequency` | Multi-threaded text processing | Hard | core | Yes |
 | `regex-lite` | Regex matching for `.`, `*` (full-string match) | Hard | core | Yes |
 
-### TypeScript (4 tasks)
+### TypeScript (5 tasks)
 
 | Task | Description | Difficulty | Tier | Hidden Tests |
 |------|-------------|------------|------|-------------|
 | `forth` | Stack-based language interpreter | Hard | core | Yes |
 | `glob` | Glob pattern matching (`*`, `?`, escaping) | Hard | core | Yes |
 | `promise-pool` | Promise pool with bounded concurrency | Hard | core | Yes |
+| `csv-lite` | Parse CSV from a stream (quotes/escapes/CRLF) | Hard | core | Yes |
 | `react` | Reactive cell system with dependencies | Hard | extended | Yes |
 
-### Kotlin (2 tasks)
+### Kotlin (3 tasks)
 
 | Task | Description | Difficulty | Tier | Hidden Tests |
 |------|-------------|------------|------|-------------|
 | `channel-multiplexer` | Combine multiple channels with priority support | Hard | extended | Yes |
 | `flow-processor` | Composable Kotlin Flow processor with operators | Hard | extended | Yes |
+| `lru-cache` | Fixed-capacity LRU cache with stable recency ordering | Hard | extended | Yes |
 
-### Dart (2 tasks)
+### Dart (3 tasks)
 
 | Task | Description | Difficulty | Tier | Hidden Tests |
 |------|-------------|------------|------|-------------|
 | `isolate-pool` | Worker pool using Dart isolates | Hard | extended | Yes |
 | `reactive-cache` | Reactive cache with TTL and stream subscriptions | Hard | extended | Yes |
+| `future-pool` | Concurrency-limited async task runner preserving order | Hard | extended | Yes |
 
-### Zig (2 tasks)
+### Zig (3 tasks)
 
 | Task | Description | Difficulty | Tier | Hidden Tests |
 |------|-------------|------------|------|-------------|
 | `arena-allocator` | Custom arena allocator with child arenas | Hard | extended | Yes |
 | `comptime-json` | Compile-time JSON schema parsing | Expert | extended | Yes |
+| `small-vector` | SmallVec with inline storage and heap growth | Hard | extended | Yes |
 
 ## Configuration
 
