@@ -22,18 +22,22 @@ const (
 	Go         Language = "go"
 	Rust       Language = "rust"
 	TypeScript Language = "typescript"
+	Kotlin     Language = "kotlin"
+	Dart       Language = "dart"
+	Zig        Language = "zig"
 )
 
 // Task represents a single evaluation task.
 type Task struct {
-	Slug        string     `toml:"slug"`
-	Name        string     `toml:"name"`
-	Language    Language   `toml:"language"`
-	Difficulty  string     `toml:"difficulty"`
-	Description string     `toml:"description"`
-	Timeout     int        `toml:"timeout,omitempty"`
-	Files       TaskFiles  `toml:"files"`
-	Validation  Validation `toml:"validation"`
+	Slug         string     `toml:"slug"`
+	Name         string     `toml:"name"`
+	Language     Language   `toml:"language"`
+	Difficulty   string     `toml:"difficulty"`
+	Description  string     `toml:"description"`
+	Timeout      int        `toml:"timeout,omitempty"`
+	AgentTimeout int        `toml:"agent_timeout,omitempty"` // seconds for agent to complete during eval
+	Files        TaskFiles  `toml:"files"`
+	Validation   Validation `toml:"validation"`
 }
 
 // ID returns the canonical task identifier in the form "<language>/<slug>".
@@ -149,7 +153,7 @@ func (l *Loader) LoadByLanguage(lang Language) ([]*Task, error) {
 func (l *Loader) loadFromEmbed() ([]*Task, error) {
 	var tasks []*Task
 
-	languages := []string{"go", "rust", "typescript"}
+	languages := []string{"go", "rust", "typescript", "kotlin", "dart", "zig"}
 	for _, lang := range languages {
 		langDir := lang // The embed is from tasks/, so paths are relative to that
 		entries, err := fs.ReadDir(l.embeddedFS, langDir)
@@ -194,7 +198,7 @@ func (l *Loader) loadFromEmbed() ([]*Task, error) {
 func (l *Loader) loadFromDir(dir string) ([]*Task, error) {
 	var tasks []*Task
 
-	languages := []string{"go", "rust", "typescript"}
+	languages := []string{"go", "rust", "typescript", "kotlin", "dart", "zig"}
 	for _, lang := range languages {
 		langDir := filepath.Join(dir, lang)
 		entries, err := os.ReadDir(langDir)
@@ -320,6 +324,12 @@ func ParseLanguage(s string) (Language, error) {
 		return Rust, nil
 	case "typescript", "ts":
 		return TypeScript, nil
+	case "kotlin", "kt":
+		return Kotlin, nil
+	case "dart":
+		return Dart, nil
+	case "zig":
+		return Zig, nil
 	default:
 		return "", fmt.Errorf("unknown language: %s", s)
 	}
@@ -339,6 +349,12 @@ func (l Language) Extension() string {
 		return ".rs"
 	case TypeScript:
 		return ".ts"
+	case Kotlin:
+		return ".kt"
+	case Dart:
+		return ".dart"
+	case Zig:
+		return ".zig"
 	default:
 		return ""
 	}

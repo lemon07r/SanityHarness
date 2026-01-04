@@ -1,0 +1,9 @@
+name: reactive_cache
+description: A reactive cache with TTL and stream-based subscriptions
+version: 1.0.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dev_dependencies:
+  test: ^1.24.0

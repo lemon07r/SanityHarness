@@ -1,0 +1,17 @@
+FROM eclipse-temurin:21-jdk-alpine
+
+RUN apk add --no-cache bash
+
+# Install Gradle
+ENV GRADLE_VERSION=8.5
+RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip && \
+    unzip -q /tmp/gradle.zip -d /opt && \
+    rm /tmp/gradle.zip && \
+    ln -s /opt/gradle-${GRADLE_VERSION}/bin/gradle /usr/local/bin/gradle
+
+# Pre-download Gradle wrapper and dependencies
+ENV GRADLE_USER_HOME=/tmp/.gradle
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

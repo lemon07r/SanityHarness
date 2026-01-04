@@ -1,0 +1,16 @@
+slug = "channel-multiplexer"
+name = "Channel Multiplexer"
+language = "kotlin"
+difficulty = "hard"
+description = "Implement a channel multiplexer that combines multiple input channels into a single output with priority support"
+agent_timeout = 240
+
+[files]
+stub = ["src/main/kotlin/ChannelMultiplexer.kt"]
+test = ["src/test/kotlin/ChannelMultiplexerTest.kt"]
+hidden_test = ["src/test/kotlin/ChannelMultiplexerHiddenTest.kt"]
+support = ["build.gradle.kts", "settings.gradle.kts"]
+
+[validation]
+command = "gradle"
+args = ["test", "--no-daemon", "-q"]

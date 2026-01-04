@@ -21,22 +21,24 @@ import (
 )
 
 var (
-	evalAgent     string
-	evalModel     string
-	evalTasks     string
-	evalLang      string
-	evalTimeout   int
-	evalOutputDir string
+	evalAgent          string
+	evalModel          string
+	evalTasks          string
+	evalLang           string
+	evalTimeout        int
+	evalOutputDir      string
+	evalKeepWorkspaces bool
 )
 
 // EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
-	Task     string  `json:"task"`
-	Language string  `json:"language"`
-	Passed   bool    `json:"passed"`
-	Attempts int     `json:"attempts"`
-	Duration float64 `json:"duration_seconds"`
-	Error    string  `json:"error,omitempty"`
+	Task         string  `json:"task"`
+	Language     string  `json:"language"`
+	Passed       bool    `json:"passed"`
+	Attempts     int     `json:"attempts"`
+	Duration     float64 `json:"duration_seconds"`
+	Error        string  `json:"error,omitempty"`
+	WorkspaceDir string  `json:"-"` // Not serialized, used for cleanup
 }
 
 // EvalSummary holds the overall evaluation summary.
@@ -182,6 +184,14 @@ Examples:
 				}
 				failed++
 			}
+
+			// Clean up workspace unless --keep-workspaces is set
+			if !evalKeepWorkspaces && result.WorkspaceDir != "" {
+				if err := os.RemoveAll(result.WorkspaceDir); err != nil {
+					logger.Debug("failed to cleanup workspace", "dir", result.WorkspaceDir, "error", err)
+				}
+			}
+
 			fmt.Println()
 		}
 
@@ -244,6 +254,8 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	// Create workspace for this task - use language prefix to avoid slug collisions
 	workspaceName := fmt.Sprintf("%s-%s", t.Language, t.Slug)
 	workspaceDir := filepath.Join(outputDir, workspaceName)
+	result.WorkspaceDir = workspaceDir // Track for cleanup
+
 	if err := r.InitWorkspaceForTask(t, workspaceDir); err != nil {
 		result.Error = fmt.Sprintf("init failed: %v", err)
 		result.Duration = time.Since(start).Seconds()
@@ -257,6 +269,10 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	agentTimeout := time.Duration(timeout) * time.Second
 	if agentTimeout <= 0 {
 		agentTimeout = 120 * time.Second
+	}
+	// Use task-specific timeout if set
+	if t.AgentTimeout > 0 {
+		agentTimeout = time.Duration(t.AgentTimeout) * time.Second
 	}
 	agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
@@ -356,22 +372,24 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 func buildAgentPrompt(t *task.Task) string {
 	return fmt.Sprintf(`You are solving a coding task called "%s" in %s.
 
-Read all files in this directory:
-- The stub file contains function signatures with panic() or todo!() placeholders
-- The test file shows the expected behavior and edge cases
+ENVIRONMENT:
+- Tests run automatically in a Docker container with %s toolchain pre-installed
+- You do NOT need to run tests yourself - just write the code
+- Do NOT search for or install language toolchains/SDKs
 
-Your job:
-1. Understand what each function should do from the tests
-2. Implement all functions, replacing panic()/todo!() with working code
-3. Handle all edge cases shown in the tests
-4. Ensure thread-safety if the tests use concurrent operations
+YOUR TASK:
+1. Read the stub file (contains function signatures with panic()/todo!() placeholders)
+2. Read the test file to understand expected behavior and edge cases
+3. Implement all functions, replacing placeholders with working code
+4. Handle all edge cases shown in the tests
+5. Ensure thread-safety if the tests use concurrent operations
 
-Write your complete implementation to the source file.
-
-IMPORTANT RULES:
-- Do NOT modify test files or support files (e.g. go.mod, Cargo.toml). Evaluation will fail if you do.
-- Only edit the stub/solution source files (and optionally add new helper source files if needed).`,
-		t.Name, t.Language)
+RULES:
+- ONLY edit the stub/solution source file(s)
+- Do NOT modify test files or support files (go.mod, Cargo.toml, pubspec.yaml, build.zig)
+- You may add new helper source files if needed
+- Evaluation fails if you modify protected files`,
+		t.Name, t.Language, t.Language)
 }
 
 func stripTxtExtension(filename string) string {
@@ -428,4 +446,5 @@ func init() {
 	evalCmd.Flags().StringVar(&evalLang, "lang", "", "filter by language (go, rust, typescript)")
 	evalCmd.Flags().IntVar(&evalTimeout, "timeout", 120, "timeout per task in seconds")
 	evalCmd.Flags().StringVar(&evalOutputDir, "output", "", "output directory for results")
+	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
 }

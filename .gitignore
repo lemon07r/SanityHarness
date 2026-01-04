@@ -43,21 +43,41 @@ eval-results/
 /go-*/
 /rust-*/
 /typescript-*/
+/kotlin-*/
+/dart-*/
+/zig-*/
 
+# Go tasks
 /bank-account/
 /dining-philosophers/
 /parallel-letter-frequency/
 /react/
+/singleflight/
+/errgroup-limit/
+
+# Rust tasks
 /circular-buffer/
 /doubly-linked-list/
 /macros/
-/forth/
-/singleflight/
-/errgroup-limit/
 /generational-arena/
 /regex-lite/
+
+# TypeScript tasks
+/forth/
 /promise-pool/
 /glob/
+
+# Kotlin tasks
+/flow-processor/
+/channel-multiplexer/
+
+# Dart tasks
+/isolate-pool/
+/reactive-cache/
+
+# Zig tasks
+/arena-allocator/
+/comptime-json/
 
 # Pampax semantic search index
 .pampa/

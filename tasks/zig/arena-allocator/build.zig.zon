@@ -1,0 +1,11 @@
+.{
+    .name = "arena-allocator",
+    .version = "0.0.1",
+    .paths = .{
+        "arena.zig",
+        "tests.zig",
+        "hidden_tests.zig",
+        "build.zig",
+        "build.zig.zon",
+    },
+}

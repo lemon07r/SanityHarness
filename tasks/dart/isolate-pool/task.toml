@@ -1,0 +1,15 @@
+slug = "isolate-pool"
+name = "Isolate Pool"
+language = "dart"
+difficulty = "hard"
+description = "Implement a worker pool using Dart isolates for parallel task execution"
+
+[files]
+stub = ["lib/isolate_pool.dart"]
+test = ["test/isolate_pool_test.dart"]
+hidden_test = ["test/isolate_pool_hidden_test.dart"]
+support = ["pubspec.yaml"]
+
+[validation]
+command = "dart"
+args = ["test"]

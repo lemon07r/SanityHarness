@@ -1,0 +1,15 @@
+slug = "arena-allocator"
+name = "Arena Allocator"
+language = "zig"
+difficulty = "hard"
+description = "Implement a custom arena allocator with child arenas, alignment, and checkpoint/restore"
+
+[files]
+stub = ["arena.zig"]
+test = ["tests.zig"]
+hidden_test = ["hidden_tests.zig"]
+support = ["build.zig", "build.zig.zon"]
+
+[validation]
+command = "zig"
+args = ["build", "test"]

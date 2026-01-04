@@ -1,0 +1,12 @@
+FROM dart:3.3-sdk
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure pub cache location
+ENV PUB_CACHE=/tmp/.pub-cache
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

@@ -28,6 +28,12 @@ func NewSummarizer(language string) *Summarizer {
 		patterns = rustPatterns
 	case "typescript":
 		patterns = tsPatterns
+	case "kotlin":
+		patterns = kotlinPatterns
+	case "dart":
+		patterns = dartPatterns
+	case "zig":
+		patterns = zigPatterns
 	default:
 		patterns = nil
 	}
@@ -139,4 +145,51 @@ var tsPatterns = []Pattern{
 	{regexp.MustCompile(`TS7006: Parameter '(.+?)' implicitly has an 'any' type`), "Parameter '$1' needs type annotation"},
 	{regexp.MustCompile(`Error: (.+)`), "Error: $1"},
 	{regexp.MustCompile(`FAIL (.+)`), "Test failed: $1"},
+}
+
+// Kotlin error patterns.
+var kotlinPatterns = []Pattern{
+	{regexp.MustCompile(`e: (.+): \((\d+), (\d+)\): (.+)`), "Error at $2:$3: $4"},
+	{regexp.MustCompile(`Unresolved reference: (\w+)`), "Unresolved reference: $1"},
+	{regexp.MustCompile(`Type mismatch: inferred type is (.+) but (.+) was expected`), "Type mismatch: $1 vs $2"},
+	{regexp.MustCompile(`None of the following functions can be called with the arguments supplied`), "No matching function signature"},
+	{regexp.MustCompile(`'(.+)' is abstract and cannot be instantiated`), "'$1' is abstract"},
+	{regexp.MustCompile(`Cannot access '(.+)': it is (.+)`), "Cannot access '$1': $2"},
+	{regexp.MustCompile(`Property must be initialized or be abstract`), "Property must be initialized"},
+	{regexp.MustCompile(`Return type mismatch`), "Return type mismatch"},
+	{regexp.MustCompile(`Null can not be a value of a non-null type`), "Null safety violation"},
+	{regexp.MustCompile(`Smart cast to '(.+)' is impossible`), "Smart cast impossible to '$1'"},
+	{regexp.MustCompile(`FAILED`), "Test failed"},
+	{regexp.MustCompile(`java\.lang\.(.+Exception): (.+)`), "$1: $2"},
+}
+
+// Dart error patterns.
+var dartPatterns = []Pattern{
+	{regexp.MustCompile(`Error: (.+)`), "Error: $1"},
+	{regexp.MustCompile(`The method '(.+)' isn't defined for the type '(.+)'`), "Method '$1' not found on '$2'"},
+	{regexp.MustCompile(`The getter '(.+)' isn't defined for the type '(.+)'`), "Getter '$1' not found on '$2'"},
+	{regexp.MustCompile(`Undefined name '(.+)'`), "Undefined: $1"},
+	{regexp.MustCompile(`A value of type '(.+)' can't be assigned to a variable of type '(.+)'`), "Type mismatch: $1 cannot be assigned to $2"},
+	{regexp.MustCompile(`The argument type '(.+)' can't be assigned to the parameter type '(.+)'`), "Argument type mismatch: $1 vs $2"},
+	{regexp.MustCompile(`Missing concrete implementation of`), "Missing implementation"},
+	{regexp.MustCompile(`The value 'null' can't be assigned to a variable of type '(.+)'`), "Null safety: cannot assign null to $1"},
+	{regexp.MustCompile(`Expected (\d+) positional arguments but got (\d+)`), "Wrong number of arguments: expected $1, got $2"},
+	{regexp.MustCompile(`'(.+)' is a required named parameter`), "Missing required parameter: $1"},
+	{regexp.MustCompile(`FAILED`), "Test failed"},
+}
+
+// Zig error patterns.
+var zigPatterns = []Pattern{
+	{regexp.MustCompile(`error: (.+)`), "Error: $1"},
+	{regexp.MustCompile(`error\(compilation\): (.+)`), "Compilation error: $1"},
+	{regexp.MustCompile(`error: expected (.+), found (.+)`), "Expected $1, found $2"},
+	{regexp.MustCompile(`error: use of undefined value`), "Use of undefined value"},
+	{regexp.MustCompile(`error: cannot assign to constant`), "Cannot assign to constant"},
+	{regexp.MustCompile(`error: type '(.+)' does not support this operation`), "Type '$1' does not support operation"},
+	{regexp.MustCompile(`error: expected type '(.+)', found '(.+)'`), "Type mismatch: expected $1, found $2"},
+	{regexp.MustCompile(`error: index out of bounds`), "Index out of bounds"},
+	{regexp.MustCompile(`error: reached unreachable code`), "Reached unreachable code"},
+	{regexp.MustCompile(`error: integer overflow`), "Integer overflow"},
+	{regexp.MustCompile(`panic: (.+)`), "Panic: $1"},
+	{regexp.MustCompile(`FAIL`), "Test failed"},
 }

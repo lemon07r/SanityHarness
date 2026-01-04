@@ -1,0 +1,16 @@
+slug = "reactive-cache"
+name = "Reactive Cache"
+language = "dart"
+difficulty = "hard"
+description = "Implement a reactive cache with TTL, automatic refresh, and stream-based subscriptions"
+agent_timeout = 240
+
+[files]
+stub = ["lib/reactive_cache.dart"]
+test = ["test/reactive_cache_test.dart"]
+hidden_test = ["test/reactive_cache_hidden_test.dart"]
+support = ["pubspec.yaml"]
+
+[validation]
+command = "dart"
+args = ["test"]

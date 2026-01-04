@@ -1,0 +1,9 @@
+name: isolate_pool
+description: A worker pool implementation using Dart isolates
+version: 1.0.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dev_dependencies:
+  test: ^1.24.0

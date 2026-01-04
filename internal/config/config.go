@@ -28,6 +28,9 @@ type DockerConfig struct {
 	GoImage         string `toml:"go_image"`
 	RustImage       string `toml:"rust_image"`
 	TypeScriptImage string `toml:"typescript_image"`
+	KotlinImage     string `toml:"kotlin_image"`
+	DartImage       string `toml:"dart_image"`
+	ZigImage        string `toml:"zig_image"`
 	AutoPull        bool   `toml:"auto_pull"`
 }
 
@@ -43,6 +46,9 @@ var Default = Config{
 		GoImage:         "ghcr.io/lemon07r/sanity-go:latest",
 		RustImage:       "ghcr.io/lemon07r/sanity-rust:latest",
 		TypeScriptImage: "ghcr.io/lemon07r/sanity-ts:latest",
+		KotlinImage:     "ghcr.io/lemon07r/sanity-kotlin:latest",
+		DartImage:       "ghcr.io/lemon07r/sanity-dart:latest",
+		ZigImage:        "ghcr.io/lemon07r/sanity-zig:latest",
 		AutoPull:        true,
 	},
 }
@@ -100,6 +106,12 @@ func (c *Config) ImageForLanguage(lang string) string {
 		return c.Docker.RustImage
 	case "typescript":
 		return c.Docker.TypeScriptImage
+	case "kotlin":
+		return c.Docker.KotlinImage
+	case "dart":
+		return c.Docker.DartImage
+	case "zig":
+		return c.Docker.ZigImage
 	default:
 		return ""
 	}

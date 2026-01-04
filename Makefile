@@ -282,19 +282,25 @@ tools-check: ## Check if required tools are installed
 
 .PHONY: docker-build
 docker-build: ## Build all Docker images for task execution
-	@printf '$(INFO) Building Docker images...\n'
+	@printf '$(INFO) Building Docker images...\\n'
 	@docker build -f containers/Dockerfile-go -t ghcr.io/lemon07r/sanity-go:latest .
 	@docker build -f containers/Dockerfile-rust -t ghcr.io/lemon07r/sanity-rust:latest .
 	@docker build -f containers/Dockerfile-ts -t ghcr.io/lemon07r/sanity-ts:latest .
-	@printf '$(OK) Docker images built\n'
+	@docker build -f containers/Dockerfile-kotlin -t ghcr.io/lemon07r/sanity-kotlin:latest .
+	@docker build -f containers/Dockerfile-dart -t ghcr.io/lemon07r/sanity-dart:latest .
+	@docker build -f containers/Dockerfile-zig -t ghcr.io/lemon07r/sanity-zig:latest .
+	@printf '$(OK) Docker images built\\n'
 
 .PHONY: docker-push
 docker-push: ## Push Docker images to GHCR
-	@printf '$(INFO) Pushing Docker images to GHCR...\n'
+	@printf '$(INFO) Pushing Docker images to GHCR...\\n'
 	@docker push ghcr.io/lemon07r/sanity-go:latest
 	@docker push ghcr.io/lemon07r/sanity-rust:latest
 	@docker push ghcr.io/lemon07r/sanity-ts:latest
-	@printf '$(OK) Docker images pushed\n'
+	@docker push ghcr.io/lemon07r/sanity-kotlin:latest
+	@docker push ghcr.io/lemon07r/sanity-dart:latest
+	@docker push ghcr.io/lemon07r/sanity-zig:latest
+	@printf '$(OK) Docker images pushed\\n'
 
 ##@ CI/CD
 

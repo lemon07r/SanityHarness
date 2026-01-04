@@ -3,10 +3,12 @@ name = "React (Reactive Cells)"
 language = "go"
 difficulty = "hard"
 description = "Implement reactive spreadsheet-like cells with change propagation"
+agent_timeout = 300
 
 [files]
 stub = ["react.go.txt"]
 test = ["react_test.go.txt"]
+hidden_test = ["react_hidden_test.go.txt"]
 support = ["go.mod.txt"]
 
 [validation]

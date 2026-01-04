@@ -1,0 +1,16 @@
+FROM alpine:3.19
+
+# Install Zig 0.13.0
+RUN apk add --no-cache wget xz && \
+    wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -O /tmp/zig.tar.xz && \
+    tar -xf /tmp/zig.tar.xz -C /opt && \
+    rm /tmp/zig.tar.xz && \
+    ln -s /opt/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig
+
+# Configure Zig cache location
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/.zig-cache
+ENV ZIG_LOCAL_CACHE_DIR=/tmp/.zig-cache
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

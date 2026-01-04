@@ -5,7 +5,7 @@ A lightweight evaluation harness for coding agents that runs "Compact Hard Probl
 ## Features
 
 - **Isolated Execution**: Each task runs in a Docker container
-- **Multi-Language Support**: Go, Rust, and TypeScript tasks (16 total)
+- **Multi-Language Support**: Go, Rust, TypeScript, Kotlin, Dart, and Zig tasks (22 total)
 - **Watch Mode**: Automatically re-run tests when files change
 - **Session Tracking**: JSON and Markdown reports with full audit trail
 - **Error Summarization**: Language-specific error extraction
@@ -86,6 +86,23 @@ make build
 ./sanity eval --agent opencode
 ./sanity eval --agent gemini --lang go
 ./sanity eval --agent gemini --tasks go/react,typescript/react
+./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
+```
+
+#### Clean Up
+
+```bash
+# Clean up workspace directories (interactive)
+./sanity clean
+
+# Clean specific types
+./sanity clean --workspaces       # Workspace directories only
+./sanity clean --sessions         # Session directories only
+./sanity clean --eval             # Eval results only
+./sanity clean --all              # Everything
+
+# Skip confirmation
+./sanity clean --all --force
 ```
 
 ### Task References
@@ -130,6 +147,27 @@ For tasks that exist in multiple languages (e.g., `react` exists in both Go and 
 | `promise-pool` | Promise pool with bounded concurrency | Hard | Yes |
 | `react` | Reactive cell system with dependencies | Hard | Yes |
 
+### Kotlin (2 tasks)
+
+| Task | Description | Difficulty | Hidden Tests |
+|------|-------------|------------|--------------|
+| `channel-multiplexer` | Combine multiple channels with priority support | Hard | Yes |
+| `flow-processor` | Composable Kotlin Flow processor with operators | Hard | Yes |
+
+### Dart (2 tasks)
+
+| Task | Description | Difficulty | Hidden Tests |
+|------|-------------|------------|--------------|
+| `isolate-pool` | Worker pool using Dart isolates | Hard | Yes |
+| `reactive-cache` | Reactive cache with TTL and stream subscriptions | Hard | Yes |
+
+### Zig (2 tasks)
+
+| Task | Description | Difficulty | Hidden Tests |
+|------|-------------|------------|--------------|
+| `arena-allocator` | Custom arena allocator with child arenas | Hard | Yes |
+| `comptime-json` | Compile-time JSON schema parsing | Expert | Yes |
+
 ## Configuration
 
 Create a `sanity.toml` file in your project root:
@@ -145,6 +183,9 @@ output_format = "all" # json, human, or all
 go_image = "ghcr.io/lemon07r/sanity-go:latest"
 rust_image = "ghcr.io/lemon07r/sanity-rust:latest"
 typescript_image = "ghcr.io/lemon07r/sanity-ts:latest"
+kotlin_image = "ghcr.io/lemon07r/sanity-kotlin:latest"
+dart_image = "ghcr.io/lemon07r/sanity-dart:latest"
+zig_image = "ghcr.io/lemon07r/sanity-zig:latest"
 auto_pull = true
 ```
 
@@ -163,7 +204,10 @@ sanityharness/
 ├── tasks/               # Embedded task files (compiled into binary)
 │   ├── go/
 │   ├── rust/
-│   └── typescript/
+│   ├── typescript/
+│   ├── kotlin/
+│   ├── dart/
+│   └── zig/
 └── containers/          # Dockerfiles for language runtimes
 ```
 
@@ -242,6 +286,9 @@ make docker-build
 docker build -f containers/Dockerfile-go -t ghcr.io/lemon07r/sanity-go:latest .
 docker build -f containers/Dockerfile-rust -t ghcr.io/lemon07r/sanity-rust:latest .
 docker build -f containers/Dockerfile-ts -t ghcr.io/lemon07r/sanity-ts:latest .
+docker build -f containers/Dockerfile-kotlin -t ghcr.io/lemon07r/sanity-kotlin:latest .
+docker build -f containers/Dockerfile-dart -t ghcr.io/lemon07r/sanity-dart:latest .
+docker build -f containers/Dockerfile-zig -t ghcr.io/lemon07r/sanity-zig:latest .
 ```
 
 ## Known Issues

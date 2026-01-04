@@ -1,0 +1,16 @@
+slug = "flow-processor"
+name = "Flow Processor"
+language = "kotlin"
+difficulty = "hard"
+description = "Implement a composable Kotlin Flow processor with transformations and error handling"
+agent_timeout = 240
+
+[files]
+stub = ["src/main/kotlin/FlowProcessor.kt"]
+test = ["src/test/kotlin/FlowProcessorTest.kt"]
+hidden_test = ["src/test/kotlin/FlowProcessorHiddenTest.kt"]
+support = ["build.gradle.kts", "settings.gradle.kts"]
+
+[validation]
+command = "gradle"
+args = ["test", "--no-daemon", "-q"]

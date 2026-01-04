@@ -1,0 +1,258 @@
+package react
+
+import (
+	"sync"
+	"testing"
+)
+
+// TransactionalReactor extends Reactor with transaction support.
+// Hidden tests require this interface to be implemented.
+type TransactionalReactor interface {
+	Reactor
+	// Transaction executes a function atomically - callbacks only fire
+	// after the transaction completes, and only if values actually changed.
+	Transaction(fn func())
+}
+
+// RemovableCell extends ComputeCell with the ability to remove it from the graph.
+type RemovableCell interface {
+	ComputeCell
+	// Remove disconnects this cell from its dependencies.
+	// After removal, the cell's callbacks should no longer fire.
+	Remove()
+}
+
+// BatchInputCell extends InputCell with batch update support.
+type BatchInputCell interface {
+	InputCell
+	// SetValueDeferred queues a value change without triggering callbacks.
+	// Values are applied when FlushDeferred is called on the reactor.
+	SetValueDeferred(int)
+}
+
+// FlushableReactor extends Reactor with deferred value flushing.
+type FlushableReactor interface {
+	Reactor
+	// FlushDeferred applies all deferred SetValue calls and triggers callbacks.
+	FlushDeferred()
+}
+
+func TestTransaction(t *testing.T) {
+	r := New()
+	tr, ok := r.(TransactionalReactor)
+	if !ok {
+		t.Fatal("Reactor must implement TransactionalReactor interface")
+	}
+
+	a := tr.CreateInput(1)
+	b := tr.CreateInput(2)
+	sum := tr.CreateCompute2(a, b, func(x, y int) int { return x + y })
+
+	var observed []int
+	sum.AddCallback(func(v int) {
+		observed = append(observed, v)
+	})
+
+	// Without transaction: would fire callback twice
+	// With transaction: should only fire once at the end
+	tr.Transaction(func() {
+		a.SetValue(10)
+		b.SetValue(20)
+	})
+
+	if len(observed) != 1 {
+		t.Fatalf("callback fired %d times, want 1", len(observed))
+	}
+	if observed[0] != 30 {
+		t.Fatalf("observed[0] = %d, want 30", observed[0])
+	}
+}
+
+func TestTransactionNoChangeNoCallback(t *testing.T) {
+	r := New()
+	tr, ok := r.(TransactionalReactor)
+	if !ok {
+		t.Fatal("Reactor must implement TransactionalReactor interface")
+	}
+
+	a := tr.CreateInput(5)
+	double := tr.CreateCompute1(a, func(x int) int { return x * 2 })
+
+	callCount := 0
+	double.AddCallback(func(v int) {
+		callCount++
+	})
+
+	// Set to same value - should not trigger callback
+	tr.Transaction(func() {
+		a.SetValue(5)
+	})
+
+	if callCount != 0 {
+		t.Fatalf("callback fired %d times, want 0 (no change)", callCount)
+	}
+}
+
+func TestTransactionIntermediateStatesNotVisible(t *testing.T) {
+	r := New()
+	tr, ok := r.(TransactionalReactor)
+	if !ok {
+		t.Fatal("Reactor must implement TransactionalReactor interface")
+	}
+
+	a := tr.CreateInput(1)
+	double := tr.CreateCompute1(a, func(x int) int { return x * 2 })
+
+	var observed []int
+	double.AddCallback(func(v int) {
+		observed = append(observed, v)
+	})
+
+	// Multiple changes in transaction - only final value should be seen
+	tr.Transaction(func() {
+		a.SetValue(2) // double would be 4
+		a.SetValue(3) // double would be 6
+		a.SetValue(5) // double is 10
+	})
+
+	if len(observed) != 1 {
+		t.Fatalf("callback fired %d times, want 1", len(observed))
+	}
+	if observed[0] != 10 {
+		t.Fatalf("observed final value = %d, want 10", observed[0])
+	}
+}
+
+func TestRemoveCell(t *testing.T) {
+	r := New()
+	a := r.CreateInput(1)
+
+	compute, ok := r.CreateCompute1(a, func(x int) int { return x + 1 }).(RemovableCell)
+	if !ok {
+		t.Fatal("ComputeCell must implement RemovableCell interface")
+	}
+
+	callCount := 0
+	compute.AddCallback(func(v int) {
+		callCount++
+	})
+
+	a.SetValue(2)
+	if callCount != 1 {
+		t.Fatalf("before remove: callback count = %d, want 1", callCount)
+	}
+
+	compute.Remove()
+
+	a.SetValue(3)
+	if callCount != 1 {
+		t.Fatalf("after remove: callback count = %d, want 1 (unchanged)", callCount)
+	}
+}
+
+func TestRemoveCellValueFrozen(t *testing.T) {
+	r := New()
+	a := r.CreateInput(5)
+
+	compute, ok := r.CreateCompute1(a, func(x int) int { return x * 2 }).(RemovableCell)
+	if !ok {
+		t.Fatal("ComputeCell must implement RemovableCell interface")
+	}
+
+	if compute.Value() != 10 {
+		t.Fatalf("before remove: value = %d, want 10", compute.Value())
+	}
+
+	compute.Remove()
+	a.SetValue(100)
+
+	// Value should remain frozen at last computed value
+	if compute.Value() != 10 {
+		t.Fatalf("after remove: value = %d, want 10 (frozen)", compute.Value())
+	}
+}
+
+func TestBatchUpdate(t *testing.T) {
+	r := New()
+	fr, ok := r.(FlushableReactor)
+	if !ok {
+		t.Fatal("Reactor must implement FlushableReactor interface")
+	}
+
+	a, ok := fr.CreateInput(1).(BatchInputCell)
+	if !ok {
+		t.Fatal("InputCell must implement BatchInputCell interface")
+	}
+	b, ok := fr.CreateInput(2).(BatchInputCell)
+	if !ok {
+		t.Fatal("InputCell must implement BatchInputCell interface")
+	}
+
+	sum := fr.CreateCompute2(a, b, func(x, y int) int { return x + y })
+
+	var observed []int
+	sum.AddCallback(func(v int) {
+		observed = append(observed, v)
+	})
+
+	// Deferred updates should not trigger callbacks
+	a.SetValueDeferred(10)
+	b.SetValueDeferred(20)
+
+	if len(observed) != 0 {
+		t.Fatalf("deferred updates triggered %d callbacks, want 0", len(observed))
+	}
+
+	// Flush should apply all changes and fire callback once
+	fr.FlushDeferred()
+
+	if len(observed) != 1 {
+		t.Fatalf("flush triggered %d callbacks, want 1", len(observed))
+	}
+	if observed[0] != 30 {
+		t.Fatalf("observed[0] = %d, want 30", observed[0])
+	}
+}
+
+func TestConcurrentTransactions(t *testing.T) {
+	r := New()
+	tr, ok := r.(TransactionalReactor)
+	if !ok {
+		t.Fatal("Reactor must implement TransactionalReactor interface")
+	}
+
+	counter := tr.CreateInput(0)
+	doubled := tr.CreateCompute1(counter, func(x int) int { return x * 2 })
+
+	var mu sync.Mutex
+	var observed []int
+	doubled.AddCallback(func(v int) {
+		mu.Lock()
+		observed = append(observed, v)
+		mu.Unlock()
+	})
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(val int) {
+			defer wg.Done()
+			tr.Transaction(func() {
+				counter.SetValue(val)
+			})
+		}(i + 1)
+	}
+
+	wg.Wait()
+
+	// Each transaction should have triggered exactly one callback
+	mu.Lock()
+	count := len(observed)
+	mu.Unlock()
+
+	if count != numGoroutines {
+		t.Fatalf("concurrent transactions: got %d callbacks, want %d", count, numGoroutines)
+	}
+}

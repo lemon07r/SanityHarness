@@ -77,6 +77,7 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(showCmd)
 	rootCmd.AddCommand(evalCmd)
+	rootCmd.AddCommand(cleanCmd)
 	rootCmd.AddCommand(versionCmd)
 }
 

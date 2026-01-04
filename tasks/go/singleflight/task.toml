@@ -3,6 +3,7 @@ name = "Singleflight"
 language = "go"
 difficulty = "expert"
 description = "Deduplicate concurrent calls by key so only one execution is in-flight per key"
+agent_timeout = 240
 
 [files]
 stub = ["singleflight.go.txt"]

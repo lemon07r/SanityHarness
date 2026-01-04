@@ -7,6 +7,7 @@ description = "Count letter frequencies using multiple threads with proper synch
 [files]
 stub = ["lib.rs"]
 test = ["tests.rs"]
+hidden_test = ["hidden_tests.rs"]
 support = ["Cargo.toml"]
 
 [validation]
