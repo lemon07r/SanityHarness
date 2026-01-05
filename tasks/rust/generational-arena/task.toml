@@ -4,6 +4,7 @@ language = "rust"
 tier = "extended"
 difficulty = "hard"
 description = "Implement an arena allocator with generational handles to prevent use-after-free"
+agent_timeout = 180
 
 [files]
 stub = ["lib.rs"]

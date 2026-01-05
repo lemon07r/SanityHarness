@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -33,13 +35,13 @@ func NewWatcher(dir string, debounce time.Duration, onChange func(), logger *slo
 func (w *Watcher) Watch(ctx context.Context) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return err
+		return fmt.Errorf("creating watcher: %w", err)
 	}
 	defer func() { _ = watcher.Close() }()
 
 	// Add the directory
 	if err := watcher.Add(w.dir); err != nil {
-		return err
+		return fmt.Errorf("watching directory %s: %w", w.dir, err)
 	}
 
 	// Also watch subdirectories
@@ -48,17 +50,28 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	}
 
 	var debounceTimer *time.Timer
+	var timerMu sync.Mutex
+	stopped := false
+
+	// Helper to safely stop the timer
+	stopTimer := func() {
+		timerMu.Lock()
+		defer timerMu.Unlock()
+		stopped = true
+		if debounceTimer != nil {
+			debounceTimer.Stop()
+		}
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
+			stopTimer()
 			return ctx.Err()
 
 		case event, ok := <-watcher.Events:
 			if !ok {
+				stopTimer()
 				return nil
 			}
 
@@ -70,15 +83,24 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			w.logger.Debug("file change detected", "file", event.Name, "op", event.Op.String())
 
 			// Debounce: reset timer on each event
+			timerMu.Lock()
 			if debounceTimer != nil {
 				debounceTimer.Stop()
 			}
-			debounceTimer = time.AfterFunc(w.debounce, func() {
-				w.onChange()
-			})
+			if !stopped {
+				debounceTimer = time.AfterFunc(w.debounce, func() {
+					timerMu.Lock()
+					defer timerMu.Unlock()
+					if !stopped {
+						w.onChange()
+					}
+				})
+			}
+			timerMu.Unlock()
 
 		case err, ok := <-watcher.Errors:
 			if !ok {
+				stopTimer()
 				return nil
 			}
 			w.logger.Error("watcher error", "error", err)

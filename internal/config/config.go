@@ -2,7 +2,7 @@
 package config
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -69,13 +69,13 @@ func configPaths() []string {
 // If configFile is empty, it searches standard locations.
 // Returns default config if no file is found.
 func Load(configFile string) (*Config, error) {
-	cfg := Default
+	cfg := Default // Start with defaults
 
 	var path string
 	if configFile != "" {
 		path = configFile
 		if _, err := os.Stat(path); err != nil {
-			return nil, errors.New("config file not found: " + path)
+			return nil, fmt.Errorf("config file not found: %s", path)
 		}
 	} else {
 		for _, p := range configPaths() {
@@ -91,7 +91,36 @@ func Load(configFile string) (*Config, error) {
 	}
 
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return nil, errors.New("failed to parse config: " + err.Error())
+		return nil, fmt.Errorf("failed to parse config %s: %w", path, err)
+	}
+
+	// Ensure critical fields aren't zeroed out by partial config
+	if cfg.Harness.SessionDir == "" {
+		cfg.Harness.SessionDir = Default.Harness.SessionDir
+	}
+	if cfg.Harness.DefaultTimeout <= 0 {
+		cfg.Harness.DefaultTimeout = Default.Harness.DefaultTimeout
+	}
+	if cfg.Harness.MaxAttempts <= 0 {
+		cfg.Harness.MaxAttempts = Default.Harness.MaxAttempts
+	}
+	if cfg.Docker.GoImage == "" {
+		cfg.Docker.GoImage = Default.Docker.GoImage
+	}
+	if cfg.Docker.RustImage == "" {
+		cfg.Docker.RustImage = Default.Docker.RustImage
+	}
+	if cfg.Docker.TypeScriptImage == "" {
+		cfg.Docker.TypeScriptImage = Default.Docker.TypeScriptImage
+	}
+	if cfg.Docker.KotlinImage == "" {
+		cfg.Docker.KotlinImage = Default.Docker.KotlinImage
+	}
+	if cfg.Docker.DartImage == "" {
+		cfg.Docker.DartImage = Default.Docker.DartImage
+	}
+	if cfg.Docker.ZigImage == "" {
+		cfg.Docker.ZigImage = Default.Docker.ZigImage
 	}
 
 	return &cfg, nil

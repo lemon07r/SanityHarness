@@ -4,6 +4,7 @@ language = "rust"
 tier = "extended"
 difficulty = "expert"
 description = "Implement a doubly linked list using unsafe Rust and raw pointers"
+agent_timeout = 300
 
 [files]
 stub = ["lib.rs"]

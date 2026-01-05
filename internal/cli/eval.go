@@ -543,6 +543,10 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 
 	case "opencode":
 		// OpenCode with prompt flag
+		// Note: OpenCode doesn't support --model flag; model selection is via config
+		if model != "" {
+			logger.Debug("--model flag ignored for opencode (use opencode config instead)", "model", model)
+		}
 		cmd = exec.CommandContext(agentCtx, "opencode", "-p", prompt)
 	}
 

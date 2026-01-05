@@ -27,6 +27,15 @@ const (
 	Zig        Language = "zig"
 )
 
+// AllLanguages lists all supported languages.
+var AllLanguages = []Language{Go, Rust, TypeScript, Kotlin, Dart, Zig}
+
+// ValidTiers lists valid tier values.
+var ValidTiers = []string{"core", "extended"}
+
+// ValidDifficulties lists valid difficulty values.
+var ValidDifficulties = []string{"hard", "expert"}
+
 // Task represents a single evaluation task.
 type Task struct {
 	Slug         string     `json:"slug"                    toml:"slug"`
@@ -60,11 +69,12 @@ type Validation struct {
 	Args    []string `json:"args"    toml:"args"`
 }
 
-// AllFiles returns all files associated with this task.
+// AllFiles returns all files associated with this task, including hidden tests.
 func (t *Task) AllFiles() []string {
-	files := make([]string, 0, len(t.Files.Stub)+len(t.Files.Test)+len(t.Files.Support))
+	files := make([]string, 0, len(t.Files.Stub)+len(t.Files.Test)+len(t.Files.HiddenTest)+len(t.Files.Support))
 	files = append(files, t.Files.Stub...)
 	files = append(files, t.Files.Test...)
+	files = append(files, t.Files.HiddenTest...)
 	files = append(files, t.Files.Support...)
 	return files
 }
@@ -81,13 +91,43 @@ func (t *Task) ValidationCommand() []string {
 	return cmd
 }
 
-// Validate checks that required task fields are present.
+// Validate checks that required task fields are present and valid.
 func (t *Task) Validate() error {
 	if t.Slug == "" {
 		return errors.New("task slug is required")
 	}
 	if t.Language == "" {
 		return errors.New("task language is required")
+	}
+	// Validate language is known
+	if _, err := ParseLanguage(string(t.Language)); err != nil {
+		return fmt.Errorf("invalid language %q: %w", t.Language, err)
+	}
+	// Validate tier if specified
+	if t.Tier != "" {
+		validTier := false
+		for _, tier := range ValidTiers {
+			if t.Tier == tier {
+				validTier = true
+				break
+			}
+		}
+		if !validTier {
+			return fmt.Errorf("invalid tier %q: must be one of %v", t.Tier, ValidTiers)
+		}
+	}
+	// Validate difficulty if specified
+	if t.Difficulty != "" {
+		validDiff := false
+		for _, diff := range ValidDifficulties {
+			if t.Difficulty == diff {
+				validDiff = true
+				break
+			}
+		}
+		if !validDiff {
+			return fmt.Errorf("invalid difficulty %q: must be one of %v", t.Difficulty, ValidDifficulties)
+		}
 	}
 	if t.Validation.Command == "" {
 		return errors.New("task validation command is required")
@@ -174,9 +214,8 @@ func (l *Loader) LoadByLanguage(lang Language) ([]*Task, error) {
 func (l *Loader) loadFromEmbed() ([]*Task, error) {
 	var tasks []*Task
 
-	languages := []string{"go", "rust", "typescript", "kotlin", "dart", "zig"}
-	for _, lang := range languages {
-		langDir := lang // The embed is from tasks/, so paths are relative to that
+	for _, lang := range AllLanguages {
+		langDir := string(lang) // The embed is from tasks/, so paths are relative to that
 		entries, err := fs.ReadDir(l.embeddedFS, langDir)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -225,11 +264,14 @@ func (l *Loader) loadFromEmbed() ([]*Task, error) {
 func (l *Loader) loadFromDir(dir string) ([]*Task, error) {
 	var tasks []*Task
 
-	languages := []string{"go", "rust", "typescript", "kotlin", "dart", "zig"}
-	for _, lang := range languages {
-		langDir := filepath.Join(dir, lang)
+	for _, lang := range AllLanguages {
+		langDir := filepath.Join(dir, string(lang))
 		entries, err := os.ReadDir(langDir)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // Language directory doesn't exist, skip
+			}
+			// Log but don't fail for permission errors on external dirs
 			continue
 		}
 
@@ -241,7 +283,8 @@ func (l *Loader) loadFromDir(dir string) ([]*Task, error) {
 			taskPath := filepath.Join(langDir, entry.Name(), "task.toml")
 			var task Task
 			if _, err := toml.DecodeFile(taskPath, &task); err != nil {
-				continue // Skip unparseable tasks in external dir
+				// Log warning for external tasks that fail to parse
+				continue
 			}
 			if task.Tier == "" {
 				task.Tier = "core"

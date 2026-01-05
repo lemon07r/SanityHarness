@@ -4,6 +4,7 @@ language = "typescript"
 tier = "extended"
 difficulty = "hard"
 description = "Implement reactive spreadsheet-like cells with dependencies and callbacks"
+agent_timeout = 300
 
 [files]
 stub = ["react.ts"]

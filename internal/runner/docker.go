@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -197,22 +198,28 @@ func (d *DockerClient) Exec(ctx context.Context, containerID string, cmd []strin
 	// stdcopy.StdCopy blocks until EOF (process exits) and does not
 	// check context cancellation, so we run it in a separate goroutine
 	// and close the connection if the timeout fires.
+	//
+	// IMPORTANT: We use a mutex to protect buffer access since the goroutine
+	// writes to them and the main goroutine reads on timeout.
 	var stdout, stderr bytes.Buffer
+	var bufMu sync.Mutex
 	copyDone := make(chan copyResult, 1)
 
 	go func() {
+		bufMu.Lock()
 		_, copyErr := stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader)
+		bufMu.Unlock()
 		copyDone <- copyResult{err: copyErr}
 	}()
 
 	// Wait for either copy to complete or timeout
 	var timedOut bool
 	select {
-	case result := <-copyDone:
+	case res := <-copyDone:
 		// Normal completion
-		if result.err != nil {
+		if res.err != nil {
 			attachResp.Close()
-			return nil, fmt.Errorf("reading exec output: %w", result.err)
+			return nil, fmt.Errorf("reading exec output: %w", res.err)
 		}
 	case <-execCtx.Done():
 		// Timeout - close connection to unblock the goroutine
@@ -224,11 +231,15 @@ func (d *DockerClient) Exec(ctx context.Context, containerID string, cmd []strin
 
 	// If timed out, return immediately with what we have
 	if timedOut {
+		bufMu.Lock()
+		stdoutStr := stdout.String()
+		stderrStr := stderr.String()
+		bufMu.Unlock()
 		return &ExecResult{
 			ExitCode: -1,
-			Stdout:   stdout.String(),
-			Stderr:   stderr.String(),
-			Combined: stdout.String() + stderr.String(),
+			Stdout:   stdoutStr,
+			Stderr:   stderrStr,
+			Combined: stdoutStr + stderrStr,
 			Duration: time.Since(start),
 		}, fmt.Errorf("exec timed out after %v", timeout)
 	}

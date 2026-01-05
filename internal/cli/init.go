@@ -79,10 +79,7 @@ Example:
 			}
 
 			// Strip .txt extension for workspace files
-			destFilename := filename
-			if len(destFilename) > 4 && destFilename[len(destFilename)-4:] == ".txt" {
-				destFilename = destFilename[:len(destFilename)-4]
-			}
+			destFilename := task.StripTxtExtension(filename)
 
 			destPath := filepath.Join(absDir, destFilename)
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {

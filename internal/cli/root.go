@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,7 +27,8 @@ var rootCmd = &cobra.Command{
 	Long: `SanityHarness is a lightweight, fast evaluation harness for coding agents.
 
 It runs "Compact Hard Problems" in isolated Docker containers, providing
-high-signal feedback for testing agent capabilities in Go, Rust, and TypeScript.
+high-signal feedback for testing agent capabilities in Go, Rust, TypeScript,
+Kotlin, Dart, and Zig.
 
 Features:
   - Fast execution via container reuse (<10 seconds per task)
@@ -34,8 +36,8 @@ Features:
   - File-based agent interface (works with any agent)
   - Error summarization per language`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Skip config loading for help
-		if cmd.Name() == "help" || cmd.Name() == "completion" {
+		// Skip config loading for commands that don't need it
+		if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "version" {
 			return nil
 		}
 
@@ -62,6 +64,11 @@ Features:
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// Check for exitError to get specific exit code
+		var exitErr *exitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.code)
+		}
 		os.Exit(1)
 	}
 }

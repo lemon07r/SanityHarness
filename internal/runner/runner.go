@@ -414,15 +414,21 @@ func (r *Runner) ensureWorkspace(t *task.Task, dir string) error {
 
 // captureWorkspace reads the workspace files into the session.
 func (r *Runner) captureWorkspace(dir string, t *task.Task, session *result.Session) error {
+	var captureErrors []string
 	for _, filename := range t.Files.Stub {
 		// Use the stripped filename when reading from workspace
 		destFilename := task.StripTxtExtension(filename)
 		path := filepath.Join(dir, destFilename)
 		content, err := os.ReadFile(path)
 		if err != nil {
+			r.logger.Warn("failed to read stub file", "file", destFilename, "error", err)
+			captureErrors = append(captureErrors, destFilename)
 			continue
 		}
 		session.FinalCode[destFilename] = string(content)
+	}
+	if len(captureErrors) > 0 {
+		return fmt.Errorf("failed to capture %d file(s): %v", len(captureErrors), captureErrors)
 	}
 	return nil
 }

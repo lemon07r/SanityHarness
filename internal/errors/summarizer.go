@@ -3,6 +3,7 @@ package errors
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func (s *Summarizer) Summarize(output string) []string {
 			if matches := p.Regex.FindStringSubmatch(line); matches != nil {
 				summary := p.Summary
 				for i, match := range matches[1:] {
-					placeholder := "$" + string(rune('1'+i))
+					placeholder := "$" + strconv.Itoa(i+1)
 					summary = strings.ReplaceAll(summary, placeholder, match)
 				}
 
@@ -97,7 +98,7 @@ func (s *Summarizer) fallbackSummary(output string) []string {
 // Go error patterns.
 var goPatterns = []Pattern{
 	{regexp.MustCompile(`DATA RACE`), "Race condition detected"},
-	{regexp.MustCompile(`fatal error: all goroutines are asleep - deadlock`), "Deadlock detected"},
+	{regexp.MustCompile(`fatal error: all goroutines are asleep - deadlock!?`), "Deadlock detected"},
 	{regexp.MustCompile(`cannot use (.+) \(.*?\) as (.+)`), "Type mismatch: $1 cannot be used as $2"},
 	{regexp.MustCompile(`undefined: (\w+)`), "Undefined: $1"},
 	{regexp.MustCompile(`(\w+) declared (and|but) not used`), "Unused variable: $1"},

@@ -4,6 +4,7 @@ language = "zig"
 tier = "extended"
 difficulty = "hard"
 description = "Implement a custom arena allocator with child arenas, alignment, and checkpoint/restore"
+agent_timeout = 240
 
 [files]
 stub = ["arena.zig"]

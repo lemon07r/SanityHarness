@@ -60,10 +60,15 @@ Examples:
 		// Handle signals for graceful shutdown
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sigCh) // Prevent goroutine leak
 		go func() {
-			<-sigCh
-			fmt.Println("\nReceived interrupt, stopping...")
-			cancel()
+			select {
+			case <-sigCh:
+				fmt.Println("\nReceived interrupt, stopping...")
+				cancel()
+			case <-ctx.Done():
+				// Context cancelled, exit goroutine
+			}
 		}()
 
 		// Run the task - workspace is created inside session by default
@@ -93,13 +98,22 @@ Examples:
 			return err
 		}
 
-		// Exit with appropriate code
+		// Return error to indicate non-zero exit (handled in Execute)
 		if session != nil && !session.Passed() {
-			os.Exit(1)
+			return &exitError{code: 1}
 		}
 
 		return nil
 	},
+}
+
+// exitError is a sentinel error for non-zero exit codes.
+type exitError struct {
+	code int
+}
+
+func (e *exitError) Error() string {
+	return fmt.Sprintf("exit code %d", e.code)
 }
 
 func init() {

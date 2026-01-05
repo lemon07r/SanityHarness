@@ -30,9 +30,9 @@ var listCmd = &cobra.Command{
 		var taskList []*task.Task
 		var err error
 		if listLanguage != "" {
-			lang, err := task.ParseLanguage(listLanguage)
-			if err != nil {
-				return err
+			lang, parseErr := task.ParseLanguage(listLanguage)
+			if parseErr != nil {
+				return parseErr
 			}
 			taskList, err = loader.LoadByLanguage(lang)
 			if err != nil {
@@ -43,6 +43,11 @@ var listCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
+		}
+
+		// Validate tier filter
+		if listTier != "" && listTier != "core" && listTier != "extended" {
+			return fmt.Errorf("invalid tier %q: must be 'core' or 'extended'", listTier)
 		}
 
 		if listTier != "" {

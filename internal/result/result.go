@@ -2,6 +2,8 @@
 package result
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -64,7 +66,11 @@ type Attempt struct {
 // NewSession creates a new session with the given parameters.
 func NewSession(taskSlug, language string, cfg SessionConfig) *Session {
 	now := time.Now()
-	id := fmt.Sprintf("%s-%s-%s", language, taskSlug, now.Format("2006-01-02T150405.000"))
+	// Add random suffix to prevent ID collisions
+	randBytes := make([]byte, 4)
+	_, _ = rand.Read(randBytes)
+	randSuffix := hex.EncodeToString(randBytes)
+	id := fmt.Sprintf("%s-%s-%s-%s", language, taskSlug, now.Format("2006-01-02T150405"), randSuffix)
 
 	return &Session{
 		ID:        id,
@@ -214,6 +220,10 @@ func (s *Session) GenerateMarkdown() string {
 
 // FormatTerminal returns a formatted string for terminal output.
 func FormatTerminal(session *Session, attempt *Attempt, watchMode bool) string {
+	if session == nil || attempt == nil {
+		return ""
+	}
+
 	var sb strings.Builder
 
 	// Header
