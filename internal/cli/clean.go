@@ -127,55 +127,50 @@ func findWorkspaceDirectories() ([]string, error) {
 		return nil, fmt.Errorf("loading tasks: %w", err)
 	}
 
-	// Build a set of patterns to match
-	patterns := make(map[string]bool)
+	// Build sets for O(1) lookups:
+	// - exactPatterns: matches "<lang>-<slug>" and bare "<slug>"
+	// - slugSet: all known slugs for prefix matching
+	exactPatterns := make(map[string]bool)
+	slugSet := make(map[string]bool)
 	for _, t := range allTasks {
-		// Match both "<lang>-<slug>" and "<slug>" patterns
-		patterns[fmt.Sprintf("%s-%s", t.Language, t.Slug)] = true
-		patterns[t.Slug] = true
+		exactPatterns[fmt.Sprintf("%s-%s", t.Language, t.Slug)] = true
+		exactPatterns[t.Slug] = true
+		slugSet[t.Slug] = true
 	}
 
-	// Scan current directory for matching directories
-	var workspaces []string
+	langPrefixes := []string{"go-", "rust-", "typescript-", "kotlin-", "dart-", "zig-"}
+
+	// Single-pass directory scan
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		return nil, fmt.Errorf("reading directory: %w", err)
 	}
 
+	var workspaces []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		// Skip hidden directories and known project directories
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		if isProjectDirectory(name) {
-			continue
-		}
-		// Check if this matches a workspace pattern
-		if patterns[name] {
-			workspaces = append(workspaces, name)
-		}
-	}
 
-	// Also look for directories matching "<lang>-*" patterns
-	langPrefixes := []string{"go-", "rust-", "typescript-", "kotlin-", "dart-", "zig-"}
-	for _, entry := range entries {
-		if !entry.IsDir() {
+		// Skip hidden directories and known project directories
+		if strings.HasPrefix(name, ".") || isProjectDirectory(name) {
 			continue
 		}
-		name := entry.Name()
+
+		// Check exact match first (handles both "<slug>" and "<lang>-<slug>")
+		if exactPatterns[name] {
+			workspaces = append(workspaces, name)
+			continue
+		}
+
+		// Check "<lang>-<slug>" patterns where slug is known
 		for _, prefix := range langPrefixes {
-			if strings.HasPrefix(name, prefix) && !contains(workspaces, name) {
-				// Check if the slug part matches a known task
+			if strings.HasPrefix(name, prefix) {
 				slug := strings.TrimPrefix(name, prefix)
-				for _, t := range allTasks {
-					if t.Slug == slug {
-						workspaces = append(workspaces, name)
-						break
-					}
+				if slugSet[slug] {
+					workspaces = append(workspaces, name)
+					break
 				}
 			}
 		}
@@ -198,16 +193,6 @@ func isProjectDirectory(name string) bool {
 		"node_modules": true,
 	}
 	return projectDirs[name]
-}
-
-// contains checks if a slice contains a string.
-func contains(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
 }
 
 func init() {

@@ -152,21 +152,17 @@ func (d *DockerClient) StartContainer(ctx context.Context, containerID string) e
 	return nil
 }
 
-// StopContainer stops a container with a timeout.
-func (d *DockerClient) StopContainer(ctx context.Context, containerID string, timeout time.Duration) error {
-	timeoutSecs := int(timeout.Seconds())
-	if err := d.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeoutSecs}); err != nil {
-		return fmt.Errorf("stopping container: %w", err)
-	}
-	return nil
-}
-
 // RemoveContainer removes a container.
 func (d *DockerClient) RemoveContainer(ctx context.Context, containerID string, force bool) error {
 	if err := d.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force}); err != nil {
 		return fmt.Errorf("removing container: %w", err)
 	}
 	return nil
+}
+
+// copyResult holds the result of stdcopy.StdCopy.
+type copyResult struct {
+	err error
 }
 
 // Exec executes a command in a running container and returns the result.
@@ -196,19 +192,57 @@ func (d *DockerClient) Exec(ctx context.Context, containerID string, cmd []strin
 	if err != nil {
 		return nil, fmt.Errorf("attaching to exec: %w", err)
 	}
-	defer attachResp.Close()
 
-	// Read output
+	// Read output in a goroutine so we can respect context timeout.
+	// stdcopy.StdCopy blocks until EOF (process exits) and does not
+	// check context cancellation, so we run it in a separate goroutine
+	// and close the connection if the timeout fires.
 	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("reading exec output: %w", err)
+	copyDone := make(chan copyResult, 1)
+
+	go func() {
+		_, copyErr := stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader)
+		copyDone <- copyResult{err: copyErr}
+	}()
+
+	// Wait for either copy to complete or timeout
+	var timedOut bool
+	select {
+	case result := <-copyDone:
+		// Normal completion
+		if result.err != nil {
+			attachResp.Close()
+			return nil, fmt.Errorf("reading exec output: %w", result.err)
+		}
+	case <-execCtx.Done():
+		// Timeout - close connection to unblock the goroutine
+		timedOut = true
+		attachResp.Close()
+		// Wait for goroutine to finish (it will error due to closed connection)
+		<-copyDone
 	}
 
-	// Get exit code
+	// If timed out, return immediately with what we have
+	if timedOut {
+		return &ExecResult{
+			ExitCode: -1,
+			Stdout:   stdout.String(),
+			Stderr:   stderr.String(),
+			Combined: stdout.String() + stderr.String(),
+			Duration: time.Since(start),
+		}, fmt.Errorf("exec timed out after %v", timeout)
+	}
+
+	// Close attach response now that copy is done
+	attachResp.Close()
+
+	// Get exit code - use a fresh context since execCtx may be close to expiring
+	inspectCtx, inspectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer inspectCancel()
+
 	var exitCode int
 	for {
-		inspectResp, err := d.client.ContainerExecInspect(execCtx, execResp.ID)
+		inspectResp, err := d.client.ContainerExecInspect(inspectCtx, execResp.ID)
 		if err != nil {
 			return nil, fmt.Errorf("inspecting exec: %w", err)
 		}
@@ -219,14 +253,15 @@ func (d *DockerClient) Exec(ctx context.Context, containerID string, cmd []strin
 		}
 
 		select {
-		case <-execCtx.Done():
+		case <-inspectCtx.Done():
+			// Shouldn't happen since process finished, but handle gracefully
 			return &ExecResult{
 				ExitCode: -1,
 				Stdout:   stdout.String(),
 				Stderr:   stderr.String(),
 				Combined: stdout.String() + stderr.String(),
 				Duration: time.Since(start),
-			}, fmt.Errorf("exec timed out")
+			}, fmt.Errorf("timeout waiting for exec exit code")
 		case <-time.After(50 * time.Millisecond):
 			continue
 		}
@@ -241,24 +276,4 @@ func (d *DockerClient) Exec(ctx context.Context, containerID string, cmd []strin
 		Combined: stdout.String() + stderr.String(),
 		Duration: duration,
 	}, nil
-}
-
-// GetContainerLogs retrieves the logs from a container.
-func (d *DockerClient) GetContainerLogs(ctx context.Context, containerID string) (string, error) {
-	reader, err := d.client.ContainerLogs(ctx, containerID, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-	})
-	if err != nil {
-		return "", fmt.Errorf("getting container logs: %w", err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, reader)
-	if err != nil {
-		return "", fmt.Errorf("reading container logs: %w", err)
-	}
-
-	return buf.String(), nil
 }

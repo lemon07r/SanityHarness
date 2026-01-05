@@ -11,7 +11,6 @@ import (
 
 	"github.com/lemon07r/sanityharness/internal/result"
 	"github.com/lemon07r/sanityharness/internal/runner"
-	"github.com/lemon07r/sanityharness/internal/task"
 	"github.com/lemon07r/sanityharness/tasks"
 )
 
@@ -27,6 +26,9 @@ var runCmd = &cobra.Command{
 	Use:   "run <task>",
 	Short: "Run evaluation for a task",
 	Long: `Executes the validation tests for a task in an isolated Docker container.
+
+The workspace is created inside the session directory by default.
+Use --workspace to specify an existing workspace or custom location.
 
 In watch mode (--watch), the harness monitors the workspace for file changes
 and automatically re-runs validation after each change.
@@ -51,15 +53,6 @@ Examples:
 			return err
 		}
 
-		workspaceDir := runWorkspace
-		if workspaceDir == "" {
-			if _, _, ok := task.ParseTaskID(taskRef); ok {
-				workspaceDir = fmt.Sprintf("%s-%s", t.Language, t.Slug)
-			} else {
-				workspaceDir = t.Slug
-			}
-		}
-
 		// Setup context with cancellation
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -73,14 +66,14 @@ Examples:
 			cancel()
 		}()
 
-		// Run the task
+		// Run the task - workspace is created inside session by default
 		session, err := r.Run(ctx, runner.RunOptions{
 			Task:         t,
 			WatchMode:    runWatch,
 			MaxAttempts:  runMaxAttempts,
 			Timeout:      runTimeout,
 			OutputDir:    runOutput,
-			WorkspaceDir: workspaceDir,
+			WorkspaceDir: runWorkspace, // Empty means session/workspace/
 		})
 
 		// Print final result
@@ -114,5 +107,5 @@ func init() {
 	runCmd.Flags().IntVar(&runMaxAttempts, "max-attempts", 0, "maximum attempts (default from config)")
 	runCmd.Flags().IntVar(&runTimeout, "timeout", 0, "timeout per attempt in seconds (default from config)")
 	runCmd.Flags().StringVar(&runOutput, "output", "", "session output directory (default from config)")
-	runCmd.Flags().StringVarP(&runWorkspace, "workspace", "w", "", "workspace directory (default: ./<task-slug>)")
+	runCmd.Flags().StringVarP(&runWorkspace, "workspace", "w", "", "workspace directory (default: inside session)")
 }

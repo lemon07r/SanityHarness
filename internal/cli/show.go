@@ -54,20 +54,13 @@ func init() {
 }
 
 func displaySession(session *result.Session, path string) error {
-	statusEmoji := map[result.Status]string{
-		result.StatusPass:    "✅",
-		result.StatusFail:    "❌",
-		result.StatusTimeout: "⏱️",
-		result.StatusError:   "⚠️",
-	}
-
 	fmt.Println()
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf(" SESSION: %s\n", session.ID)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
 
-	fmt.Printf(" Status:    %s %s\n", statusEmoji[session.Status], strings.ToUpper(string(session.Status)))
+	fmt.Printf(" Status:    %s %s\n", result.StatusEmoji[session.Status], strings.ToUpper(string(session.Status)))
 	fmt.Printf(" Task:      %s/%s\n", session.Language, session.TaskSlug)
 	fmt.Printf(" Attempts:  %d\n", len(session.Attempts))
 	fmt.Printf(" Duration:  %s\n", session.TotalTime.Round(1e6)) // Round to milliseconds

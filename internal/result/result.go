@@ -20,6 +20,14 @@ const (
 	StatusError   Status = "error"
 )
 
+// StatusEmoji maps status values to their emoji representations.
+var StatusEmoji = map[Status]string{
+	StatusPass:    "✅",
+	StatusFail:    "❌",
+	StatusTimeout: "⏱️",
+	StatusError:   "⚠️",
+}
+
 // Session represents a complete evaluation session.
 type Session struct {
 	ID          string            `json:"id"`
@@ -114,15 +122,14 @@ func (s *Session) SessionDir(baseDir string) string {
 }
 
 // Save writes the session data to disk.
+// If the workspace is already inside the session directory (the default),
+// this only writes result.json, report.md, and attempt logs.
 func (s *Session) Save(baseDir string) error {
 	dir := s.SessionDir(baseDir)
 
 	// Create directories
 	if err := os.MkdirAll(filepath.Join(dir, "logs"), 0755); err != nil {
 		return fmt.Errorf("creating session directory: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "workspace"), 0755); err != nil {
-		return fmt.Errorf("creating workspace directory: %w", err)
 	}
 
 	// Write result.json
@@ -148,31 +155,10 @@ func (s *Session) Save(baseDir string) error {
 		}
 	}
 
-	// Write final code
-	hasGoFiles := false
-	for filename, content := range s.FinalCode {
-		codePath := filepath.Join(dir, "workspace", filename)
-		if err := os.MkdirAll(filepath.Dir(codePath), 0755); err != nil {
-			return fmt.Errorf("creating code directory: %w", err)
-		}
-		if err := os.WriteFile(codePath, []byte(content), 0644); err != nil {
-			return fmt.Errorf("writing code file: %w", err)
-		}
-		if strings.HasSuffix(filename, ".go") {
-			hasGoFiles = true
-		}
-	}
-
-	// Prevent Go tooling from treating saved workspaces as part of this module.
-	if hasGoFiles {
-		modPath := filepath.Join(dir, "workspace", "go.mod")
-		if _, err := os.Stat(modPath); err != nil {
-			mod := "module sanityharness-session\n\ngo 1.25\n"
-			if err := os.WriteFile(modPath, []byte(mod), 0644); err != nil {
-				return fmt.Errorf("writing workspace go.mod: %w", err)
-			}
-		}
-	}
+	// Note: Workspace files are no longer copied here since the workspace
+	// is now created inside the session directory by the runner.
+	// The FinalCode field in result.json still contains the stub files for
+	// programmatic access.
 
 	return nil
 }
@@ -181,15 +167,8 @@ func (s *Session) Save(baseDir string) error {
 func (s *Session) GenerateMarkdown() string {
 	var sb strings.Builder
 
-	statusEmoji := map[Status]string{
-		StatusPass:    "✅",
-		StatusFail:    "❌",
-		StatusTimeout: "⏱️",
-		StatusError:   "⚠️",
-	}
-
 	sb.WriteString(fmt.Sprintf("# SanityHarness Report: %s\n\n", s.TaskSlug))
-	sb.WriteString(fmt.Sprintf("**Status:** %s %s\n\n", statusEmoji[s.Status], strings.ToUpper(string(s.Status))))
+	sb.WriteString(fmt.Sprintf("**Status:** %s %s\n\n", StatusEmoji[s.Status], strings.ToUpper(string(s.Status))))
 	sb.WriteString(fmt.Sprintf("**Language:** %s\n\n", s.Language))
 	sb.WriteString(fmt.Sprintf("**Started:** %s\n\n", s.StartedAt.Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("**Completed:** %s\n\n", s.CompletedAt.Format(time.RFC3339)))

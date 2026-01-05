@@ -29,16 +29,16 @@ const (
 
 // Task represents a single evaluation task.
 type Task struct {
-	Slug         string     `toml:"slug"`
-	Name         string     `toml:"name"`
-	Language     Language   `toml:"language"`
-	Tier         string     `toml:"tier,omitempty"`
-	Difficulty   string     `toml:"difficulty"`
-	Description  string     `toml:"description"`
-	Timeout      int        `toml:"timeout,omitempty"`
-	AgentTimeout int        `toml:"agent_timeout,omitempty"` // seconds for agent to complete during eval
-	Files        TaskFiles  `toml:"files"`
-	Validation   Validation `toml:"validation"`
+	Slug         string     `json:"slug"                    toml:"slug"`
+	Name         string     `json:"name"                    toml:"name"`
+	Language     Language   `json:"language"                toml:"language"`
+	Tier         string     `json:"tier,omitempty"          toml:"tier,omitempty"`
+	Difficulty   string     `json:"difficulty"              toml:"difficulty"`
+	Description  string     `json:"description"             toml:"description"`
+	Timeout      int        `json:"timeout,omitempty"       toml:"timeout,omitempty"`
+	AgentTimeout int        `json:"agent_timeout,omitempty" toml:"agent_timeout,omitempty"`
+	Files        TaskFiles  `json:"files"                   toml:"files"`
+	Validation   Validation `json:"validation"              toml:"validation"`
 }
 
 // ID returns the canonical task identifier in the form "<language>/<slug>".
@@ -48,16 +48,16 @@ func (t *Task) ID() string {
 
 // TaskFiles specifies the files that make up a task.
 type TaskFiles struct {
-	Stub       []string `toml:"stub"`
-	Test       []string `toml:"test"`
-	HiddenTest []string `toml:"hidden_test,omitempty"`
-	Support    []string `toml:"support,omitempty"`
+	Stub       []string `json:"stub"                  toml:"stub"`
+	Test       []string `json:"test"                  toml:"test"`
+	HiddenTest []string `json:"hidden_test,omitempty" toml:"hidden_test,omitempty"`
+	Support    []string `json:"support,omitempty"     toml:"support,omitempty"`
 }
 
 // Validation specifies how to validate a task solution.
 type Validation struct {
-	Command string   `toml:"command"`
-	Args    []string `toml:"args"`
+	Command string   `json:"command" toml:"command"`
+	Args    []string `json:"args"    toml:"args"`
 }
 
 // AllFiles returns all files associated with this task.
@@ -79,6 +79,26 @@ func (t *Task) ValidationCommand() []string {
 	cmd := []string{t.Validation.Command}
 	cmd = append(cmd, t.Validation.Args...)
 	return cmd
+}
+
+// Validate checks that required task fields are present.
+func (t *Task) Validate() error {
+	if t.Slug == "" {
+		return errors.New("task slug is required")
+	}
+	if t.Language == "" {
+		return errors.New("task language is required")
+	}
+	if t.Validation.Command == "" {
+		return errors.New("task validation command is required")
+	}
+	if len(t.Files.Stub) == 0 {
+		return fmt.Errorf("task %s has no stub files", t.Slug)
+	}
+	if len(t.Files.Test) == 0 {
+		return fmt.Errorf("task %s has no test files", t.Slug)
+	}
+	return nil
 }
 
 // Loader handles loading tasks from embedded or external sources.
@@ -183,6 +203,9 @@ func (l *Loader) loadFromEmbed() ([]*Task, error) {
 			if task.Tier == "" {
 				task.Tier = "core"
 			}
+			if err := task.Validate(); err != nil {
+				return nil, fmt.Errorf("invalid task %s: %w", taskPath, err)
+			}
 
 			tasks = append(tasks, &task)
 		}
@@ -218,10 +241,13 @@ func (l *Loader) loadFromDir(dir string) ([]*Task, error) {
 			taskPath := filepath.Join(langDir, entry.Name(), "task.toml")
 			var task Task
 			if _, err := toml.DecodeFile(taskPath, &task); err != nil {
-				continue
+				continue // Skip unparseable tasks in external dir
 			}
 			if task.Tier == "" {
 				task.Tier = "core"
+			}
+			if err := task.Validate(); err != nil {
+				continue // Skip invalid tasks in external dir
 			}
 
 			tasks = append(tasks, &task)
@@ -365,4 +391,14 @@ func (l Language) Extension() string {
 	default:
 		return ""
 	}
+}
+
+// StripTxtExtension removes the .txt suffix from a filename if present.
+// Task files are stored with .txt extension in the embedded FS to prevent
+// language toolchains from treating them as source files.
+func StripTxtExtension(filename string) string {
+	if strings.HasSuffix(filename, ".txt") {
+		return strings.TrimSuffix(filename, ".txt")
+	}
+	return filename
 }

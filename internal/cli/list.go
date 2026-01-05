@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/lemon07r/sanityharness/internal/runner"
 	"github.com/lemon07r/sanityharness/internal/task"
 	"github.com/lemon07r/sanityharness/tasks"
 )
@@ -25,24 +24,22 @@ var listCmd = &cobra.Command{
 	Short: "List available tasks",
 	Long:  `Lists all available evaluation tasks, optionally filtered by language.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		r, err := runner.NewRunner(cfg, tasks.FS, tasksDir, logger)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = r.Close() }()
+		// Load tasks directly without creating Docker client
+		loader := task.NewLoader(tasks.FS, tasksDir)
 
 		var taskList []*task.Task
+		var err error
 		if listLanguage != "" {
 			lang, err := task.ParseLanguage(listLanguage)
 			if err != nil {
 				return err
 			}
-			taskList, err = r.ListTasksByLanguage(lang)
+			taskList, err = loader.LoadByLanguage(lang)
 			if err != nil {
 				return err
 			}
 		} else {
-			taskList, err = r.ListTasks()
+			taskList, err = loader.LoadAll()
 			if err != nil {
 				return err
 			}
@@ -77,7 +74,7 @@ var listCmd = &cobra.Command{
 }
 
 func init() {
-	listCmd.Flags().StringVarP(&listLanguage, "language", "l", "", "filter by language (go, rust, typescript)")
+	listCmd.Flags().StringVarP(&listLanguage, "language", "l", "", "filter by language (go, rust, ts, kotlin, dart, zig)")
 	listCmd.Flags().StringVar(&listTier, "tier", "", "filter by tier (core, extended)")
 	listCmd.Flags().StringVar(&listDifficulty, "difficulty", "", "filter by difficulty (e.g., hard, expert)")
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "output as JSON")

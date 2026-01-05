@@ -1,6 +1,7 @@
 const std = @import("std");
 
 /// SmallVec stores up to InlineCap items inline, and spills to the heap when exceeded.
+/// Note: InlineCap may be 0, meaning all storage is heap-allocated from the start.
 pub fn SmallVec(comptime T: type, comptime InlineCap: usize) type {
     return struct {
         const Self = @This();

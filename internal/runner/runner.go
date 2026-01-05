@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/mount"
@@ -126,16 +125,6 @@ func (r *Runner) cacheMountsForLanguage(lang task.Language) ([]mount.Mount, erro
 	return mounts, nil
 }
 
-// stripTxtExtension removes the .txt extension from embedded file names.
-// This is needed because Go files are stored with .txt extension to avoid
-// the Go compiler treating them as source files.
-func stripTxtExtension(filename string) string {
-	if strings.HasSuffix(filename, ".txt") {
-		return strings.TrimSuffix(filename, ".txt")
-	}
-	return filename
-}
-
 // RunOptions configures a task run.
 type RunOptions struct {
 	TaskSlug     string
@@ -180,21 +169,6 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 		opts.OutputDir = r.cfg.Harness.SessionDir
 	}
 
-	// Determine workspace directory
-	workspaceDir := opts.WorkspaceDir
-	if workspaceDir == "" {
-		workspaceDir = filepath.Join(".", t.Slug)
-	}
-	workspaceDir, err = filepath.Abs(workspaceDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolving workspace path: %w", err)
-	}
-
-	// Ensure workspace exists with task files
-	if err := r.ensureWorkspace(t, workspaceDir); err != nil {
-		return nil, fmt.Errorf("setting up workspace: %w", err)
-	}
-
 	// Get image for language
 	imageName := r.cfg.ImageForLanguage(string(t.Language))
 	if imageName == "" {
@@ -211,13 +185,32 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 		return nil, fmt.Errorf("ensuring image: %w", err)
 	}
 
-	// Create session
+	// Create session first so we can put workspace inside session directory
 	session := result.NewSession(t.Slug, string(t.Language), result.SessionConfig{
 		Timeout:     opts.Timeout,
 		MaxAttempts: opts.MaxAttempts,
 		WatchMode:   opts.WatchMode,
 		Image:       imageName,
 	})
+
+	// Determine workspace directory - now inside the session folder
+	var workspaceDir string
+	if opts.WorkspaceDir != "" {
+		// Explicit workspace provided (e.g., from eval command)
+		workspaceDir = opts.WorkspaceDir
+	} else {
+		// Default: put workspace inside session directory
+		workspaceDir = filepath.Join(session.SessionDir(opts.OutputDir), "workspace")
+	}
+	workspaceDir, err = filepath.Abs(workspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace path: %w", err)
+	}
+
+	// Ensure workspace exists with task files
+	if err := r.ensureWorkspace(t, workspaceDir); err != nil {
+		return nil, fmt.Errorf("setting up workspace: %w", err)
+	}
 
 	// Create container
 	r.logger.Info("creating container", "workspace", workspaceDir)
@@ -416,33 +409,14 @@ func (r *Runner) ensureWorkspace(t *task.Task, dir string) error {
 		return nil
 	}
 
-	// Copy all task files
-	for _, filename := range t.AllFiles() {
-		content, err := r.taskLoader.ReadTaskFile(t, filename)
-		if err != nil {
-			return fmt.Errorf("reading task file %s: %w", filename, err)
-		}
-
-		// Strip .txt extension for workspace files
-		destFilename := stripTxtExtension(filename)
-		destPath := filepath.Join(dir, destFilename)
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-			return fmt.Errorf("creating directory for %s: %w", destFilename, err)
-		}
-
-		if err := os.WriteFile(destPath, content, 0644); err != nil {
-			return fmt.Errorf("writing file %s: %w", destFilename, err)
-		}
-	}
-
-	return nil
+	return r.copyTaskFiles(t, dir, t.AllFiles())
 }
 
 // captureWorkspace reads the workspace files into the session.
 func (r *Runner) captureWorkspace(dir string, t *task.Task, session *result.Session) error {
 	for _, filename := range t.Files.Stub {
 		// Use the stripped filename when reading from workspace
-		destFilename := stripTxtExtension(filename)
+		destFilename := task.StripTxtExtension(filename)
 		path := filepath.Join(dir, destFilename)
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -453,46 +427,18 @@ func (r *Runner) captureWorkspace(dir string, t *task.Task, session *result.Sess
 	return nil
 }
 
-// InitWorkspace initializes a workspace for a task without running it.
-func (r *Runner) InitWorkspace(taskSlug, outputDir string) error {
-	t, err := r.taskLoader.Load(taskSlug)
-	if err != nil {
-		return fmt.Errorf("loading task: %w", err)
-	}
-
-	if outputDir == "" {
-		outputDir = t.Slug
-	}
-
-	absDir, err := filepath.Abs(outputDir)
-	if err != nil {
-		return fmt.Errorf("resolving path: %w", err)
-	}
-
-	// Create directory
-	if err := os.MkdirAll(absDir, 0755); err != nil {
-		return fmt.Errorf("creating directory: %w", err)
-	}
-
-	// Check if already has files
-	entries, err := os.ReadDir(absDir)
-	if err != nil {
-		return fmt.Errorf("reading directory: %w", err)
-	}
-	if len(entries) > 0 {
-		return fmt.Errorf("directory is not empty: %s", absDir)
-	}
-
-	// Copy all task files
-	for _, filename := range t.AllFiles() {
+// copyTaskFiles copies task files to the destination directory.
+// This is a helper used by ensureWorkspace, InitWorkspace, and InitWorkspaceForTask.
+func (r *Runner) copyTaskFiles(t *task.Task, destDir string, files []string) error {
+	for _, filename := range files {
 		content, err := r.taskLoader.ReadTaskFile(t, filename)
 		if err != nil {
 			return fmt.Errorf("reading task file %s: %w", filename, err)
 		}
 
 		// Strip .txt extension for workspace files
-		destFilename := stripTxtExtension(filename)
-		destPath := filepath.Join(absDir, destFilename)
+		destFilename := task.StripTxtExtension(filename)
+		destPath := filepath.Join(destDir, destFilename)
 		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 			return fmt.Errorf("creating directory for %s: %w", destFilename, err)
 		}
@@ -501,7 +447,6 @@ func (r *Runner) InitWorkspace(taskSlug, outputDir string) error {
 			return fmt.Errorf("writing file %s: %w", destFilename, err)
 		}
 	}
-
 	return nil
 }
 
@@ -530,26 +475,7 @@ func (r *Runner) InitWorkspaceForTask(t *task.Task, outputDir string) error {
 		return fmt.Errorf("directory is not empty: %s", absDir)
 	}
 
-	// Copy all task files
-	for _, filename := range t.AllFiles() {
-		content, err := r.taskLoader.ReadTaskFile(t, filename)
-		if err != nil {
-			return fmt.Errorf("reading task file %s: %w", filename, err)
-		}
-
-		// Strip .txt extension for workspace files
-		destFilename := stripTxtExtension(filename)
-		destPath := filepath.Join(absDir, destFilename)
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-			return fmt.Errorf("creating directory for %s: %w", destFilename, err)
-		}
-
-		if err := os.WriteFile(destPath, content, 0644); err != nil {
-			return fmt.Errorf("writing file %s: %w", destFilename, err)
-		}
-	}
-
-	return nil
+	return r.copyTaskFiles(t, absDir, t.AllFiles())
 }
 
 // ListTasks returns all available tasks.

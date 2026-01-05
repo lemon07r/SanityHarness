@@ -4,6 +4,7 @@ language = "dart"
 tier = "extended"
 difficulty = "hard"
 description = "Implement a worker pool using Dart isolates for parallel task execution"
+agent_timeout = 180
 
 [files]
 stub = ["lib/isolate_pool.dart"]

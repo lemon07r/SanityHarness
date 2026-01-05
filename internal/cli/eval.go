@@ -33,6 +33,7 @@ var (
 	evalOutputDir      string
 	evalKeepWorkspaces bool
 	evalParallel       int
+	evalDryRun         bool
 )
 
 // EvalResult holds the result of evaluating a single task.
@@ -98,23 +99,27 @@ Examples:
   sanity eval --agent gemini --model gemini-3-pro-preview
   sanity eval --agent opencode
   sanity eval --agent gemini --lang go
-  sanity eval --agent gemini --tasks bank-account,react`,
+  sanity eval --agent gemini --tasks bank-account,react
+  sanity eval --agent gemini --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if evalAgent == "" {
-			return fmt.Errorf("--agent is required (gemini or opencode)")
-		}
+		// Dry-run mode doesn't require agent to be installed
+		if !evalDryRun {
+			if evalAgent == "" {
+				return fmt.Errorf("--agent is required (gemini or opencode)")
+			}
 
-		// Validate agent
-		switch evalAgent {
-		case "gemini", "opencode":
-			// OK
-		default:
-			return fmt.Errorf("unknown agent: %s (supported: gemini, opencode)", evalAgent)
-		}
+			// Validate agent
+			switch evalAgent {
+			case "gemini", "opencode":
+				// OK
+			default:
+				return fmt.Errorf("unknown agent: %s (supported: gemini, opencode)", evalAgent)
+			}
 
-		// Check agent is installed
-		if _, err := exec.LookPath(evalAgent); err != nil {
-			return fmt.Errorf("%s not found in PATH", evalAgent)
+			// Check agent is installed
+			if _, err := exec.LookPath(evalAgent); err != nil {
+				return fmt.Errorf("%s not found in PATH", evalAgent)
+			}
 		}
 
 		r, err := runner.NewRunner(cfg, tasks.FS, tasksDir, logger)
@@ -211,6 +216,42 @@ Examples:
 
 		if len(allTasks) == 0 {
 			return fmt.Errorf("no tasks match the specified filters")
+		}
+
+		// Dry-run mode: print what would be executed and exit
+		if evalDryRun {
+			fmt.Println()
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println(" SANITY HARNESS - Dry Run")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println()
+			if evalAgent != "" {
+				fmt.Printf(" Agent:      %s\n", evalAgent)
+			}
+			if evalModel != "" {
+				fmt.Printf(" Model:      %s\n", evalModel)
+			}
+			if evalTier != "" {
+				fmt.Printf(" Tier:       %s\n", evalTier)
+			}
+			if evalDifficulty != "" {
+				fmt.Printf(" Difficulty: %s\n", evalDifficulty)
+			}
+			fmt.Printf(" Tasks:      %d\n", len(allTasks))
+			fmt.Println()
+			fmt.Println(" Tasks that would be executed:")
+			fmt.Println("─────────────────────────────────────────────────────────────")
+			for i, t := range allTasks {
+				timeout := evalTimeout
+				if t.AgentTimeout > 0 {
+					timeout = t.AgentTimeout
+				}
+				fmt.Printf(" %3d. %-35s [%s, %s, %ds]\n",
+					i+1, t.ID(), t.Tier, t.Difficulty, timeout)
+			}
+			fmt.Println("─────────────────────────────────────────────────────────────")
+			fmt.Println()
+			return nil
 		}
 
 		// Create output directory
@@ -560,7 +601,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	if t.Language == task.TypeScript && len(t.HiddenTestFiles()) > 0 {
 		validationCmd = append([]string{}, t.ValidationCommand()...)
 		for _, filename := range t.HiddenTestFiles() {
-			validationCmd = append(validationCmd, stripTxtExtension(filename))
+			validationCmd = append(validationCmd, task.StripTxtExtension(filename))
 		}
 	}
 
@@ -590,11 +631,11 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 func buildAgentPrompt(t *task.Task) string {
 	stubFiles := make([]string, 0, len(t.Files.Stub))
 	for _, f := range t.Files.Stub {
-		stubFiles = append(stubFiles, stripTxtExtension(f))
+		stubFiles = append(stubFiles, task.StripTxtExtension(f))
 	}
 	testFiles := make([]string, 0, len(t.Files.Test))
 	for _, f := range t.Files.Test {
-		testFiles = append(testFiles, stripTxtExtension(f))
+		testFiles = append(testFiles, task.StripTxtExtension(f))
 	}
 
 	return fmt.Sprintf(`You are solving a coding task called "%s".
@@ -634,13 +675,6 @@ RULES:
 		t.Language)
 }
 
-func stripTxtExtension(filename string) string {
-	if strings.HasSuffix(filename, ".txt") {
-		return strings.TrimSuffix(filename, ".txt")
-	}
-	return filename
-}
-
 func detectModifiedTaskFiles(loader *task.Loader, t *task.Task, workspaceDir string) ([]string, error) {
 	var modified []string
 	for _, filename := range append(append([]string{}, t.Files.Test...), t.Files.Support...) {
@@ -649,14 +683,14 @@ func detectModifiedTaskFiles(loader *task.Loader, t *task.Task, workspaceDir str
 			return nil, fmt.Errorf("reading canonical %s: %w", filename, err)
 		}
 
-		workspacePath := filepath.Join(workspaceDir, stripTxtExtension(filename))
+		workspacePath := filepath.Join(workspaceDir, task.StripTxtExtension(filename))
 		got, err := os.ReadFile(workspacePath)
 		if err != nil {
-			modified = append(modified, stripTxtExtension(filename))
+			modified = append(modified, task.StripTxtExtension(filename))
 			continue
 		}
 		if !bytes.Equal(got, want) {
-			modified = append(modified, stripTxtExtension(filename))
+			modified = append(modified, task.StripTxtExtension(filename))
 		}
 	}
 	return modified, nil
@@ -669,7 +703,7 @@ func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir s
 			return fmt.Errorf("reading %s: %w", filename, err)
 		}
 
-		destFilename := stripTxtExtension(filename)
+		destFilename := task.StripTxtExtension(filename)
 		destPath := filepath.Join(workspaceDir, destFilename)
 		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 			return fmt.Errorf("creating directory for %s: %w", destFilename, err)
@@ -692,4 +726,5 @@ func init() {
 	evalCmd.Flags().IntVar(&evalParallel, "parallel", 1, "run up to N tasks in parallel")
 	evalCmd.Flags().StringVar(&evalOutputDir, "output", "", "output directory for results")
 	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
+	evalCmd.Flags().BoolVar(&evalDryRun, "dry-run", false, "show what tasks would be run without executing")
 }
