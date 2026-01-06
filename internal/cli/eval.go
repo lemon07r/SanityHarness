@@ -43,6 +43,7 @@ type EvalResult struct {
 	Tier         string  `json:"tier,omitempty"`
 	Difficulty   string  `json:"difficulty,omitempty"`
 	Passed       bool    `json:"passed"`
+	TimedOut     bool    `json:"timed_out,omitempty"`
 	Attempts     int     `json:"attempts"`
 	Duration     float64 `json:"duration_seconds"`
 	AgentTime    float64 `json:"agent_duration_seconds,omitempty"`
@@ -567,11 +568,23 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	agentErr := cmd.Run()
 	result.AgentTime = time.Since(agentStart).Seconds()
 	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
+		result.TimedOut = true
 		logger.Debug("agent timed out", "timeout", agentTimeout)
 	}
 	if agentErr != nil {
 		logger.Debug("agent returned error", "error", agentErr)
 		// Don't fail yet - the tests will determine success
+	}
+
+	// Preserve agent log in eval output directory for debugging
+	agentLogSrc := filepath.Join(workspaceDir, "agent.log")
+	if _, err := os.Stat(agentLogSrc); err == nil {
+		agentLogDst := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug), "agent.log")
+		if err := os.MkdirAll(filepath.Dir(agentLogDst), 0755); err == nil {
+			if srcData, err := os.ReadFile(agentLogSrc); err == nil {
+				_ = os.WriteFile(agentLogDst, srcData, 0644)
+			}
+		}
 	}
 
 	// Ensure the agent didn't modify task-owned files.

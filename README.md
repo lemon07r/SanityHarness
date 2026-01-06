@@ -94,6 +94,7 @@ make build
 ./sanity eval --agent gemini --difficulty hard,expert
 ./sanity eval --agent gemini --tasks go/react,typescript/react
 ./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
+./sanity eval --agent gemini --dry-run          # Show tasks without running
 ```
 
 #### Clean Up
@@ -242,7 +243,7 @@ Each run creates a session directory with:
 Example session structure:
 ```
 sessions/
-└── go-bank-account-2024-12-30T143022/
+└── go-bank-account-2024-12-30T143022-a1b2c3d4/
     ├── result.json
     ├── report.md
     ├── logs/
@@ -252,6 +253,17 @@ sessions/
         ├── bank_account.go
         └── go.mod
 ```
+
+Session IDs include a random 8-character suffix (e.g., `-a1b2c3d4`) to prevent collisions.
+
+### Eval Output
+
+Eval runs create an output directory with:
+
+- `summary.json` - Overall results with pass rates by language/tier/difficulty
+- `<lang>-<slug>/agent.log` - Agent output for debugging (preserved even if workspace is cleaned)
+
+The summary includes a `timed_out` flag for each task indicating if the agent hit the timeout.
 
 ## Development
 
