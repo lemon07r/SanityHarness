@@ -97,8 +97,9 @@ Supported agents:
 
 Examples:
   sanity eval --agent gemini
-  sanity eval --agent gemini --model gemini-3-pro-preview
+  sanity eval --agent gemini --model gemini-2.5-pro-preview-06-05
   sanity eval --agent opencode
+  sanity eval --agent opencode --model google/gemini-2.5-flash
   sanity eval --agent gemini --lang go
   sanity eval --agent gemini --tasks bank-account,react
   sanity eval --agent gemini --dry-run`,
@@ -543,12 +544,12 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		cmd = exec.CommandContext(agentCtx, "gemini", args...)
 
 	case "opencode":
-		// OpenCode with prompt flag
-		// Note: OpenCode doesn't support --model flag; model selection is via config
+		// OpenCode using 'run' subcommand with prompt
+		args := []string{"run", prompt}
 		if model != "" {
-			logger.Debug("--model flag ignored for opencode (use opencode config instead)", "model", model)
+			args = append(args, "-m", model)
 		}
-		cmd = exec.CommandContext(agentCtx, "opencode", "-p", prompt)
+		cmd = exec.CommandContext(agentCtx, "opencode", args...)
 	}
 
 	cmd.Dir = workspaceDir
@@ -734,7 +735,7 @@ func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir s
 
 func init() {
 	evalCmd.Flags().StringVar(&evalAgent, "agent", "", "agent to evaluate (gemini, opencode)")
-	evalCmd.Flags().StringVar(&evalModel, "model", "", "model to use (for gemini)")
+	evalCmd.Flags().StringVar(&evalModel, "model", "", "model to use (e.g., gemini-2.5-pro or google/gemini-2.5-flash)")
 	evalCmd.Flags().StringVar(&evalTasks, "tasks", "", "comma-separated list of task slugs")
 	evalCmd.Flags().StringVar(&evalLang, "lang", "", "filter by language (go, rust, typescript)")
 	evalCmd.Flags().StringVar(&evalTier, "tier", "core", "filter by tier (core, extended, all)")
