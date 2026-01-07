@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"github.com/zeebo/blake3"
 
+	"github.com/lemon07r/sanityharness/internal/config"
 	"github.com/lemon07r/sanityharness/internal/runner"
 	"github.com/lemon07r/sanityharness/internal/task"
 	"github.com/lemon07r/sanityharness/tasks"
@@ -91,36 +94,44 @@ var evalCmd = &cobra.Command{
 	Short: "Evaluate an agent against all tasks",
 	Long: `Runs all (or selected) tasks against a coding agent and reports results.
 
-Supported agents:
-  gemini    - Gemini CLI (requires 'gemini' in PATH)
-  opencode  - OpenCode CLI (requires 'opencode' in PATH)
+Built-in agents:
+  gemini    - Google Gemini CLI
+  opencode  - OpenCode CLI
+  claude    - Anthropic Claude Code
+  codex     - OpenAI Codex CLI
+  kimi      - Moonshot Kimi CLI
+  crush     - Crush CLI
+  copilot   - GitHub Copilot CLI
+  droid     - Factory Droid CLI
+  iflow     - iFlow CLI
+  qwen      - Qwen Code CLI
+
+Custom agents can be configured in sanity.toml under [agents.<name>].
 
 Examples:
   sanity eval --agent gemini
-  sanity eval --agent gemini --model gemini-2.5-pro-preview-06-05
-  sanity eval --agent opencode
+  sanity eval --agent gemini --model gemini-2.5-pro
   sanity eval --agent opencode --model google/gemini-2.5-flash
-  sanity eval --agent gemini --lang go
-  sanity eval --agent gemini --tasks bank-account,react
+  sanity eval --agent claude --lang go
+  sanity eval --agent my-custom-agent --tasks bank-account,react
   sanity eval --agent gemini --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Dry-run mode doesn't require agent to be installed
 		if !evalDryRun {
 			if evalAgent == "" {
-				return fmt.Errorf("--agent is required (gemini or opencode)")
+				return fmt.Errorf("--agent is required (use --help to see available agents)")
 			}
 
-			// Validate agent
-			switch evalAgent {
-			case "gemini", "opencode":
-				// OK
-			default:
-				return fmt.Errorf("unknown agent: %s (supported: gemini, opencode)", evalAgent)
+			// Validate agent exists in config
+			agentCfg := cfg.GetAgent(evalAgent)
+			if agentCfg == nil {
+				available := strings.Join(cfg.ListAgents(), ", ")
+				return fmt.Errorf("unknown agent: %s (available: %s)", evalAgent, available)
 			}
 
-			// Check agent is installed
-			if _, err := exec.LookPath(evalAgent); err != nil {
-				return fmt.Errorf("%s not found in PATH", evalAgent)
+			// Check agent binary is installed
+			if _, err := exec.LookPath(agentCfg.Command); err != nil {
+				return fmt.Errorf("agent %q binary %q not found in PATH", evalAgent, agentCfg.Command)
 			}
 		}
 
@@ -490,6 +501,24 @@ Examples:
 		} else {
 			fmt.Printf(" Results saved to: %s\n", summaryPath)
 		}
+
+		// Generate attestation for verification
+		loader := task.NewLoader(tasks.FS, tasksDir)
+		attestation, err := generateAttestation(
+			evalAgent, evalModel, timestamp, totalDuration,
+			results, evalOutputDir, loader, allTasks,
+		)
+		if err != nil {
+			logger.Warn("failed to generate attestation", "error", err)
+		} else {
+			attestationPath := filepath.Join(evalOutputDir, "attestation.json")
+			attestationData, _ := json.MarshalIndent(attestation, "", "  ")
+			if err := os.WriteFile(attestationPath, attestationData, 0644); err != nil {
+				logger.Warn("failed to save attestation", "error", err)
+			} else {
+				fmt.Printf(" Attestation saved to: %s\n", attestationPath)
+			}
+		}
 		fmt.Println()
 
 		return nil
@@ -519,7 +548,6 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	}
 
 	// Build agent command
-	var cmd *exec.Cmd
 	prompt := buildAgentPrompt(t)
 	result.PromptChars = utf8.RuneCountInString(prompt)
 
@@ -534,23 +562,15 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
 
-	switch agent {
-	case "gemini":
-		args := []string{"--yolo"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		args = append(args, prompt)
-		cmd = exec.CommandContext(agentCtx, "gemini", args...)
-
-	case "opencode":
-		// OpenCode using 'run' subcommand with prompt
-		args := []string{"run", prompt}
-		if model != "" {
-			args = append(args, "-m", model)
-		}
-		cmd = exec.CommandContext(agentCtx, "opencode", args...)
+	// Get agent configuration
+	agentCfg := cfg.GetAgent(agent)
+	if agentCfg == nil {
+		result.Error = fmt.Sprintf("unknown agent: %s", agent)
+		result.Duration = time.Since(start).Seconds()
+		return result
 	}
+
+	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model)
 
 	cmd.Dir = workspaceDir
 	cmd.Stdout = nil // Suppress output
@@ -733,8 +753,186 @@ func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir s
 	return nil
 }
 
+// buildAgentCommand creates an exec.Cmd for the given agent configuration.
+// It handles prompt placeholder substitution, model flag positioning, and environment variables.
+func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt, model string) *exec.Cmd {
+	var args []string
+
+	// Determine model flag position (default to "before")
+	position := agentCfg.ModelFlagPosition
+	if position == "" {
+		position = "before"
+	}
+
+	// Add model flag if specified (before position)
+	if model != "" && agentCfg.ModelFlag != "" && position == "before" {
+		args = append(args, agentCfg.ModelFlag, model)
+	}
+
+	// Process args, replacing {prompt} placeholder
+	for _, arg := range agentCfg.Args {
+		if arg == "{prompt}" {
+			args = append(args, prompt)
+		} else {
+			args = append(args, arg)
+		}
+	}
+
+	// Add model flag if specified (after position)
+	if model != "" && agentCfg.ModelFlag != "" && position == "after" {
+		args = append(args, agentCfg.ModelFlag, model)
+	}
+
+	cmd := exec.CommandContext(ctx, agentCfg.Command, args...)
+
+	// Add environment variables if specified
+	if len(agentCfg.Env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range agentCfg.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+
+	return cmd
+}
+
+// EvalAttestation provides cryptographic verification of eval results.
+type EvalAttestation struct {
+	Version   string                     `json:"version"`
+	Harness   AttestationHarness         `json:"harness"`
+	Eval      AttestationEval            `json:"eval"`
+	Tasks     map[string]AttestationTask `json:"tasks"`
+	Integrity AttestationIntegrity       `json:"integrity"`
+}
+
+// AttestationHarness contains harness version information.
+type AttestationHarness struct {
+	Version   string `json:"version"`
+	BuildDate string `json:"build_date"`
+}
+
+// AttestationEval contains evaluation metadata.
+type AttestationEval struct {
+	Agent     string  `json:"agent"`
+	Model     string  `json:"model,omitempty"`
+	Timestamp string  `json:"timestamp"`
+	Duration  float64 `json:"duration_seconds"`
+}
+
+// AttestationTask contains per-task verification data.
+type AttestationTask struct {
+	TaskHash     string  `json:"task_hash"`
+	SolutionHash string  `json:"solution_hash,omitempty"`
+	Passed       bool    `json:"passed"`
+	Duration     float64 `json:"duration_seconds"`
+}
+
+// AttestationIntegrity contains aggregate hashes for verification.
+type AttestationIntegrity struct {
+	TasksHash   string `json:"tasks_hash"`
+	ResultsHash string `json:"results_hash"`
+}
+
+// hashBytes returns the BLAKE3 hash of data as a prefixed hex string.
+func hashBytes(data []byte) string {
+	h := blake3.Sum256(data)
+	return "blake3:" + hex.EncodeToString(h[:])
+}
+
+// hashFiles returns the BLAKE3 hash of multiple files concatenated.
+func hashFiles(paths []string) (string, error) {
+	hasher := blake3.New()
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // Skip missing files
+		}
+		_, _ = hasher.Write(data)
+	}
+	sum := hasher.Sum(nil)
+	return "blake3:" + hex.EncodeToString(sum), nil
+}
+
+// generateAttestation creates an attestation for the eval run.
+func generateAttestation(
+	agent, model, timestamp string,
+	totalDuration float64,
+	results []EvalResult,
+	outputDir string,
+	loader *task.Loader,
+	allTasks []*task.Task,
+) (*EvalAttestation, error) {
+	attestation := &EvalAttestation{
+		Version: "1",
+		Harness: AttestationHarness{
+			Version:   Version,
+			BuildDate: BuildDate,
+		},
+		Eval: AttestationEval{
+			Agent:     agent,
+			Model:     model,
+			Timestamp: timestamp,
+			Duration:  totalDuration,
+		},
+		Tasks: make(map[string]AttestationTask),
+	}
+
+	// Build a map of tasks by ID for quick lookup
+	taskMap := make(map[string]*task.Task)
+	for _, t := range allTasks {
+		taskMap[t.ID()] = t
+	}
+
+	// Compute task hashes
+	var allTaskHashes []byte
+	for _, r := range results {
+		t := taskMap[r.Task]
+		if t == nil {
+			continue
+		}
+
+		// Hash task files (stub + test + support)
+		var taskFileContents []byte
+		for _, f := range append(append(t.Files.Stub, t.Files.Test...), t.Files.Support...) {
+			if content, err := loader.ReadTaskFile(t, f); err == nil {
+				taskFileContents = append(taskFileContents, content...)
+			}
+		}
+		taskHash := hashBytes(taskFileContents)
+
+		// Hash solution files if they exist
+		var solutionHash string
+		workspaceDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
+		var solutionPaths []string
+		for _, f := range t.Files.Stub {
+			solutionPaths = append(solutionPaths, filepath.Join(workspaceDir, task.StripTxtExtension(f)))
+		}
+		if hash, err := hashFiles(solutionPaths); err == nil {
+			solutionHash = hash
+		}
+
+		attestation.Tasks[r.Task] = AttestationTask{
+			TaskHash:     taskHash,
+			SolutionHash: solutionHash,
+			Passed:       r.Passed,
+			Duration:     r.Duration,
+		}
+
+		allTaskHashes = append(allTaskHashes, []byte(taskHash)...)
+	}
+
+	// Compute integrity hashes
+	attestation.Integrity.TasksHash = hashBytes(allTaskHashes)
+
+	// Hash the results JSON
+	resultsJSON, _ := json.Marshal(results)
+	attestation.Integrity.ResultsHash = hashBytes(resultsJSON)
+
+	return attestation, nil
+}
+
 func init() {
-	evalCmd.Flags().StringVar(&evalAgent, "agent", "", "agent to evaluate (gemini, opencode)")
+	evalCmd.Flags().StringVar(&evalAgent, "agent", "", "agent to evaluate (see --help for list)")
 	evalCmd.Flags().StringVar(&evalModel, "model", "", "model to use (e.g., gemini-2.5-pro or google/gemini-2.5-flash)")
 	evalCmd.Flags().StringVar(&evalTasks, "tasks", "", "comma-separated list of task slugs")
 	evalCmd.Flags().StringVar(&evalLang, "lang", "", "filter by language (go, rust, typescript)")

@@ -5,14 +5,89 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/BurntSushi/toml"
 )
 
+// AgentConfig defines how to invoke a coding agent.
+type AgentConfig struct {
+	Command           string            `toml:"command"`             // Binary name or path
+	Args              []string          `toml:"args"`                // Args with {prompt} placeholder
+	ModelFlag         string            `toml:"model_flag"`          // e.g., "--model", "-m"
+	ModelFlagPosition string            `toml:"model_flag_position"` // "before" (default) or "after"
+	Env               map[string]string `toml:"env"`                 // Environment variables
+}
+
+// DefaultAgents provides built-in configurations for popular coding agents.
+var DefaultAgents = map[string]AgentConfig{
+	"gemini": {
+		Command:           "gemini",
+		Args:              []string{"--yolo", "{prompt}"},
+		ModelFlag:         "--model",
+		ModelFlagPosition: "before",
+	},
+	"opencode": {
+		Command:           "opencode",
+		Args:              []string{"run", "{prompt}"},
+		ModelFlag:         "-m",
+		ModelFlagPosition: "after",
+	},
+	"claude": {
+		Command:           "claude",
+		Args:              []string{"-p", "--dangerously-skip-permissions", "{prompt}"},
+		ModelFlag:         "--model",
+		ModelFlagPosition: "before",
+	},
+	"codex": {
+		Command:           "codex",
+		Args:              []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "{prompt}"},
+		ModelFlag:         "-m",
+		ModelFlagPosition: "before",
+	},
+	"kimi": {
+		Command:           "kimi",
+		Args:              []string{"--yolo", "-c", "{prompt}"},
+		ModelFlag:         "-m",
+		ModelFlagPosition: "before",
+	},
+	"crush": {
+		Command:           "crush",
+		Args:              []string{"run", "-y", "{prompt}"},
+		ModelFlag:         "",
+		ModelFlagPosition: "",
+	},
+	"copilot": {
+		Command:           "copilot",
+		Args:              []string{"--allow-all-tools", "-i", "{prompt}"},
+		ModelFlag:         "--model",
+		ModelFlagPosition: "before",
+	},
+	"droid": {
+		Command:           "droid",
+		Args:              []string{"exec", "--skip-permissions-unsafe", "{prompt}"},
+		ModelFlag:         "-m",
+		ModelFlagPosition: "before",
+	},
+	"iflow": {
+		Command:           "iflow",
+		Args:              []string{"--yolo", "-p", "{prompt}"},
+		ModelFlag:         "-m",
+		ModelFlagPosition: "before",
+	},
+	"qwen": {
+		Command:           "qwen",
+		Args:              []string{"--yolo", "{prompt}"},
+		ModelFlag:         "-m",
+		ModelFlagPosition: "before",
+	},
+}
+
 // Config holds all configuration for SanityHarness.
 type Config struct {
-	Harness HarnessConfig `toml:"harness"`
-	Docker  DockerConfig  `toml:"docker"`
+	Harness HarnessConfig          `toml:"harness"`
+	Docker  DockerConfig           `toml:"docker"`
+	Agents  map[string]AgentConfig `toml:"agents"`
 }
 
 // HarnessConfig contains harness-specific settings.
@@ -144,4 +219,48 @@ func (c *Config) ImageForLanguage(lang string) string {
 	default:
 		return ""
 	}
+}
+
+// GetAgent returns the agent configuration for the given name.
+// User-configured agents take precedence over built-in defaults.
+// Returns nil if the agent is not found.
+func (c *Config) GetAgent(name string) *AgentConfig {
+	// Check user-configured agents first
+	if c.Agents != nil {
+		if agent, ok := c.Agents[name]; ok {
+			return &agent
+		}
+	}
+	// Fall back to built-in defaults
+	if agent, ok := DefaultAgents[name]; ok {
+		return &agent
+	}
+	return nil
+}
+
+// ListAgents returns all available agent names (built-in + user-configured), sorted.
+func (c *Config) ListAgents() []string {
+	seen := make(map[string]bool)
+	var names []string
+
+	// Add user-configured agents first
+	for name := range c.Agents {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+
+	// Add built-in agents
+	for name := range DefaultAgents {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+
+	// Sort for consistent output
+	sort.Strings(names)
+
+	return names
 }

@@ -85,11 +85,11 @@ make build
 #### Evaluate an Agent
 
 ```bash
-# Supported agents: gemini, opencode
+# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen
 ./sanity eval --agent gemini
-./sanity eval --agent gemini --model gemini-3-pro-preview
-./sanity eval --agent opencode
-./sanity eval --agent gemini --lang go
+./sanity eval --agent gemini --model gemini-2.5-pro
+./sanity eval --agent opencode --model google/gemini-2.5-flash
+./sanity eval --agent claude --lang go
 ./sanity eval --agent gemini --tier all --parallel 4
 ./sanity eval --agent gemini --difficulty hard,expert
 ./sanity eval --agent gemini --tasks go/react,typescript/react
@@ -261,9 +261,48 @@ Session IDs include a random 8-character suffix (e.g., `-a1b2c3d4`) to prevent c
 Eval runs create an output directory with:
 
 - `summary.json` - Overall results with pass rates by language/tier/difficulty
+- `attestation.json` - BLAKE3 hashes for verification (task files, solutions, results)
 - `<lang>-<slug>/agent.log` - Agent output for debugging (preserved even if workspace is cleaned)
 
 The summary includes a `timed_out` flag for each task indicating if the agent hit the timeout.
+
+## Agent Configuration
+
+SanityHarness supports 10 built-in agents. Custom agents can be configured in `sanity.toml`:
+
+### Built-in Agents
+
+| Agent | Description |
+|-------|-------------|
+| `gemini` | Google Gemini CLI |
+| `opencode` | OpenCode CLI |
+| `claude` | Anthropic Claude Code |
+| `codex` | OpenAI Codex CLI |
+| `kimi` | Moonshot Kimi CLI |
+| `crush` | Crush CLI |
+| `copilot` | GitHub Copilot CLI |
+| `droid` | Factory Droid CLI |
+| `iflow` | iFlow CLI |
+| `qwen` | Qwen Code CLI |
+
+### Custom Agent Configuration
+
+```toml
+# Override a built-in agent
+[agents.gemini]
+command = "gemini"
+args = ["--yolo", "--model", "gemini-2.5-pro", "{prompt}"]
+
+# Add a custom agent
+[agents.my-agent]
+command = "/path/to/my-agent"
+args = ["--auto-approve", "{prompt}"]
+model_flag = "-m"              # Optional: flag for --model
+model_flag_position = "before" # "before" (default) or "after" args
+env = { API_KEY = "xxx" }      # Optional: environment variables
+```
+
+See [AGENTS.md](AGENTS.md) for full configuration documentation.
 
 ## Development
 

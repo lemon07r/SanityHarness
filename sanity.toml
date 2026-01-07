@@ -11,4 +11,39 @@ output_format = "all"       # json, human, or all
 go_image = "ghcr.io/lemon07r/sanity-go:latest"
 rust_image = "ghcr.io/lemon07r/sanity-rust:latest"
 typescript_image = "ghcr.io/lemon07r/sanity-ts:latest"
+kotlin_image = "ghcr.io/lemon07r/sanity-kotlin:latest"
+dart_image = "ghcr.io/lemon07r/sanity-dart:latest"
+zig_image = "ghcr.io/lemon07r/sanity-zig:latest"
 auto_pull = true            # automatically pull images if missing
+
+# =============================================================================
+# Agent Configuration
+# =============================================================================
+# Built-in agents with sensible defaults:
+#   gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen
+#
+# You can override any built-in agent or add custom agents below.
+# Each agent config supports:
+#   command           - Binary name or path (required)
+#   args              - Arguments with {prompt} placeholder (required)
+#   model_flag        - Flag for specifying model (optional)
+#   model_flag_position - "before" or "after" args (default: "before")
+#   env               - Environment variables as key-value pairs (optional)
+#
+# Example: Override gemini to use a specific model by default
+# [agents.gemini]
+# command = "gemini"
+# args = ["--yolo", "--model", "gemini-2.5-pro", "{prompt}"]
+#
+# Example: Add a custom agent
+# [agents.my-agent]
+# command = "/path/to/my-agent"
+# args = ["--auto-approve", "--format", "json", "{prompt}"]
+# model_flag = "-m"
+# model_flag_position = "before"
+# env = { MY_API_KEY = "xxx", DEBUG = "true" }
+#
+# Example: Agent with prompt in the middle of args
+# [agents.special-agent]
+# command = "special"
+# args = ["run", "{prompt}", "--verbose", "--no-confirm"]
