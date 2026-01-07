@@ -36,7 +36,10 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
+      # Build golangci-lint from source to match our Go version
+      # The pre-built binaries are compiled with Go 1.24 and can't lint Go 1.25 code
+      - name: Install golangci-lint from source
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+      - name: Run golangci-lint
+        run: golangci-lint run --timeout=5m
