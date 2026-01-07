@@ -97,6 +97,13 @@ make build
 ./sanity eval --agent gemini --dry-run          # Show tasks without running
 ```
 
+#### Verify a Submission
+
+```bash
+# Verify integrity of an eval submission (no re-running, just hash checks)
+./sanity verify ./eval-results/gemini-2026-01-07T120000
+```
+
 #### Clean Up
 
 ```bash
@@ -207,7 +214,7 @@ auto_pull = true
 sanityharness/
 ├── cmd/sanity/          # CLI entry point
 ├── internal/
-│   ├── cli/             # Cobra commands (list, init, run, show, eval, clean, version)
+│   ├── cli/             # Cobra commands (list, init, run, show, eval, verify, clean, version)
 │   ├── config/          # TOML configuration with defaults
 │   ├── errors/          # Language-specific error summarization
 │   ├── result/          # Session and attempt types, output formatting
