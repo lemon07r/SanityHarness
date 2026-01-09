@@ -267,11 +267,13 @@ Session IDs include a random 8-character suffix (e.g., `-a1b2c3d4`) to prevent c
 
 Eval runs create an output directory with:
 
-- `summary.json` - Overall results with pass rates by language/tier/difficulty
+- `summary.json` - Complete results with weighted scores and breakdowns by language/tier/difficulty
 - `attestation.json` - BLAKE3 hashes for verification (task files, solutions, results)
+- `report.md` - Human-readable Markdown report with tables and status icons
+- `submission.json` - Compact format optimized for leaderboard submissions
 - `<lang>-<slug>/agent.log` - Agent output for debugging (preserved even if workspace is cleaned)
 
-The summary includes a `timed_out` flag for each task indicating if the agent hit the timeout.
+The summary includes weighted scoring metrics (`weighted_score`, `weighted_pass_rate`) that account for task difficulty based on test complexity, hidden test ratio, and timeout requirements. Task results include a `status` field (`pass`, `partial_pass`, `fail`, `integrity_violation`) for fine-grained analysis.
 
 ## Agent Configuration
 
@@ -308,8 +310,6 @@ model_flag = "-m"              # Optional: flag for --model
 model_flag_position = "before" # "before" (default) or "after" args
 env = { API_KEY = "xxx" }      # Optional: environment variables
 ```
-
-See [AGENTS.md](AGENTS.md) for full configuration documentation.
 
 ## Development
 

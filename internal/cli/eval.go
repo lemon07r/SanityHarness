@@ -41,19 +41,22 @@ var (
 
 // EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
-	Task         string  `json:"task"`
-	Language     string  `json:"language"`
-	Tier         string  `json:"tier,omitempty"`
-	Difficulty   string  `json:"difficulty,omitempty"`
-	Passed       bool    `json:"passed"`
-	TimedOut     bool    `json:"timed_out,omitempty"`
-	Attempts     int     `json:"attempts"`
-	Duration     float64 `json:"duration_seconds"`
-	AgentTime    float64 `json:"agent_duration_seconds,omitempty"`
-	ValidateTime float64 `json:"validation_duration_seconds,omitempty"`
-	PromptChars  int     `json:"prompt_chars,omitempty"`
-	Error        string  `json:"error,omitempty"`
-	WorkspaceDir string  `json:"-"` // Not serialized, used for cleanup
+	Task          string            `json:"task"`
+	Language      string            `json:"language"`
+	Tier          string            `json:"tier,omitempty"`
+	Difficulty    string            `json:"difficulty,omitempty"`
+	Passed        bool              `json:"passed"`
+	AgentTimedOut bool              `json:"agent_timed_out,omitempty"`
+	Status        task.ResultStatus `json:"status,omitempty"`
+	Attempts      int               `json:"attempts"`
+	Duration      float64           `json:"duration_seconds"`
+	AgentTime     float64           `json:"agent_duration_seconds,omitempty"`
+	ValidateTime  float64           `json:"validation_duration_seconds,omitempty"`
+	PromptChars   int               `json:"prompt_chars,omitempty"`
+	Error         string            `json:"error,omitempty"`
+	Weight        float64           `json:"weight,omitempty"`
+	WeightedScore float64           `json:"weighted_score,omitempty"`
+	WorkspaceDir  string            `json:"-"` // Not serialized, used for cleanup
 }
 
 // EvalAggregate summarizes results for a group (language, tier, difficulty).
@@ -69,24 +72,30 @@ type EvalAggregate struct {
 
 // EvalSummary holds the overall evaluation summary.
 type EvalSummary struct {
-	Agent        string                   `json:"agent"`
-	Model        string                   `json:"model,omitempty"`
-	Timestamp    string                   `json:"timestamp"`
-	Tier         string                   `json:"tier,omitempty"`
-	Difficulty   string                   `json:"difficulty,omitempty"`
-	Parallel     int                      `json:"parallel,omitempty"`
-	Results      []EvalResult             `json:"results"`
-	Passed       int                      `json:"passed"`
-	Failed       int                      `json:"failed"`
-	Total        int                      `json:"total"`
-	PassRate     float64                  `json:"pass_rate"`
-	Duration     float64                  `json:"duration_seconds,omitempty"`
-	AgentTime    float64                  `json:"agent_duration_seconds,omitempty"`
-	ValidateTime float64                  `json:"validation_duration_seconds,omitempty"`
-	PromptChars  int                      `json:"prompt_chars,omitempty"`
-	ByLanguage   map[string]EvalAggregate `json:"by_language,omitempty"`
-	ByTier       map[string]EvalAggregate `json:"by_tier,omitempty"`
-	ByDifficulty map[string]EvalAggregate `json:"by_difficulty,omitempty"`
+	Agent               string                   `json:"agent"`
+	Model               string                   `json:"model,omitempty"`
+	Timestamp           string                   `json:"timestamp"`
+	Tier                string                   `json:"tier,omitempty"`
+	Difficulty          string                   `json:"difficulty,omitempty"`
+	Parallel            int                      `json:"parallel,omitempty"`
+	Results             []EvalResult             `json:"results"`
+	Passed              int                      `json:"passed"`
+	Failed              int                      `json:"failed"`
+	Total               int                      `json:"total"`
+	PassRate            float64                  `json:"pass_rate"`
+	WeightedScore       float64                  `json:"weighted_score,omitempty"`
+	MaxPossibleScore    float64                  `json:"max_possible_score,omitempty"`
+	WeightedPassRate    float64                  `json:"weighted_pass_rate,omitempty"`
+	CleanPasses         int                      `json:"clean_passes,omitempty"`
+	PartialPasses       int                      `json:"partial_passes,omitempty"`
+	IntegrityViolations int                      `json:"integrity_violations,omitempty"`
+	Duration            float64                  `json:"duration_seconds,omitempty"`
+	AgentTime           float64                  `json:"agent_duration_seconds,omitempty"`
+	ValidateTime        float64                  `json:"validation_duration_seconds,omitempty"`
+	PromptChars         int                      `json:"prompt_chars,omitempty"`
+	ByLanguage          map[string]EvalAggregate `json:"by_language,omitempty"`
+	ByTier              map[string]EvalAggregate `json:"by_tier,omitempty"`
+	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
 }
 
 var evalCmd = &cobra.Command{
@@ -433,6 +442,11 @@ Examples:
 		var totalAgentTime float64
 		var totalValidateTime float64
 		var totalPromptChars int
+		var totalWeightedScore float64
+		var maxPossibleScore float64
+		var cleanPasses int
+		var partialPasses int
+		var integrityViolations int
 
 		addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
 			agg := m[key]
@@ -453,6 +467,18 @@ Examples:
 			totalAgentTime += r.AgentTime
 			totalValidateTime += r.ValidateTime
 			totalPromptChars += r.PromptChars
+			totalWeightedScore += r.WeightedScore
+			maxPossibleScore += r.Weight
+
+			// Count by status
+			switch r.Status {
+			case task.StatusPass:
+				cleanPasses++
+			case task.StatusPartialPass:
+				partialPasses++
+			case task.StatusIntegrityViolation:
+				integrityViolations++
+			}
 
 			addAgg(byLanguage, r.Language, r)
 			if r.Tier != "" {
@@ -461,6 +487,12 @@ Examples:
 			if r.Difficulty != "" {
 				addAgg(byDifficulty, r.Difficulty, r)
 			}
+		}
+
+		// Calculate weighted pass rate
+		weightedPassRate := 0.0
+		if maxPossibleScore > 0 {
+			weightedPassRate = totalWeightedScore / maxPossibleScore * 100
 		}
 
 		finalize := func(m map[string]EvalAggregate) map[string]EvalAggregate {
@@ -474,24 +506,30 @@ Examples:
 		}
 
 		summary := EvalSummary{
-			Agent:        evalAgent,
-			Model:        evalModel,
-			Timestamp:    timestamp,
-			Tier:         evalTier,
-			Difficulty:   evalDifficulty,
-			Parallel:     parallel,
-			Results:      results,
-			Passed:       passed,
-			Failed:       failed,
-			Total:        total,
-			PassRate:     passRate,
-			Duration:     totalDuration,
-			AgentTime:    totalAgentTime,
-			ValidateTime: totalValidateTime,
-			PromptChars:  totalPromptChars,
-			ByLanguage:   finalize(byLanguage),
-			ByTier:       finalize(byTier),
-			ByDifficulty: finalize(byDifficulty),
+			Agent:               evalAgent,
+			Model:               evalModel,
+			Timestamp:           timestamp,
+			Tier:                evalTier,
+			Difficulty:          evalDifficulty,
+			Parallel:            parallel,
+			Results:             results,
+			Passed:              passed,
+			Failed:              failed,
+			Total:               total,
+			PassRate:            passRate,
+			WeightedScore:       totalWeightedScore,
+			MaxPossibleScore:    maxPossibleScore,
+			WeightedPassRate:    weightedPassRate,
+			CleanPasses:         cleanPasses,
+			PartialPasses:       partialPasses,
+			IntegrityViolations: integrityViolations,
+			Duration:            totalDuration,
+			AgentTime:           totalAgentTime,
+			ValidateTime:        totalValidateTime,
+			PromptChars:         totalPromptChars,
+			ByLanguage:          finalize(byLanguage),
+			ByTier:              finalize(byTier),
+			ByDifficulty:        finalize(byDifficulty),
 		}
 
 		summaryPath := filepath.Join(evalOutputDir, "summary.json")
@@ -519,6 +557,26 @@ Examples:
 				fmt.Printf(" Attestation saved to: %s\n", attestationPath)
 			}
 		}
+
+		// Generate human-readable report.md
+		reportMd := generateEvalReport(summary, attestation)
+		reportPath := filepath.Join(evalOutputDir, "report.md")
+		if err := os.WriteFile(reportPath, []byte(reportMd), 0644); err != nil {
+			logger.Warn("failed to save report", "error", err)
+		} else {
+			fmt.Printf(" Report saved to: %s\n", reportPath)
+		}
+
+		// Generate leaderboard submission file
+		submission := generateLeaderboardSubmission(summary, attestation)
+		submissionData, _ := json.MarshalIndent(submission, "", "  ")
+		submissionPath := filepath.Join(evalOutputDir, "submission.json")
+		if err := os.WriteFile(submissionPath, submissionData, 0644); err != nil {
+			logger.Warn("failed to save submission", "error", err)
+		} else {
+			fmt.Printf(" Submission saved to: %s\n", submissionPath)
+		}
+
 		fmt.Println()
 
 		return nil
@@ -589,7 +647,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	agentErr := cmd.Run()
 	result.AgentTime = time.Since(agentStart).Seconds()
 	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
-		result.TimedOut = true
+		result.AgentTimedOut = true
 		logger.Debug("agent timed out", "timeout", agentTimeout)
 	}
 	if agentErr != nil {
@@ -663,7 +721,39 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	result.Passed = session.Passed()
 	result.Attempts = len(session.Attempts)
 
+	// Compute task weight and score
+	testContent := loadTaskTestContent(loader, t)
+	hiddenContent := loadTaskHiddenTestContent(loader, t)
+	weight := task.ComputeWeight(t, testContent, hiddenContent)
+	result.Weight = weight.Base
+	result.Status = task.DetermineStatus(result.Passed, result.AgentTimedOut, result.Error)
+	result.WeightedScore = task.ScoreResult(result.Passed, result.AgentTimedOut, result.Error, weight)
+
 	return result
+}
+
+// loadTaskTestContent reads all public test file contents for weight calculation.
+func loadTaskTestContent(loader *task.Loader, t *task.Task) []byte {
+	var content []byte
+	for _, f := range t.Files.Test {
+		data, err := loader.ReadTaskFile(t, f)
+		if err == nil {
+			content = append(content, data...)
+		}
+	}
+	return content
+}
+
+// loadTaskHiddenTestContent reads all hidden test file contents for weight calculation.
+func loadTaskHiddenTestContent(loader *task.Loader, t *task.Task) []byte {
+	var content []byte
+	for _, f := range t.Files.HiddenTest {
+		data, err := loader.ReadTaskFile(t, f)
+		if err == nil {
+			content = append(content, data...)
+		}
+	}
+	return content
 }
 
 func buildAgentPrompt(t *task.Task) string {
@@ -807,8 +897,9 @@ type EvalAttestation struct {
 
 // AttestationHarness contains harness version information.
 type AttestationHarness struct {
-	Version   string `json:"version"`
-	BuildDate string `json:"build_date"`
+	Version       string `json:"version"`
+	BuildDate     string `json:"build_date"`
+	WeightVersion string `json:"weight_version,omitempty"`
 }
 
 // AttestationEval contains evaluation metadata.
@@ -865,8 +956,9 @@ func generateAttestation(
 	attestation := &EvalAttestation{
 		Version: "1",
 		Harness: AttestationHarness{
-			Version:   Version,
-			BuildDate: BuildDate,
+			Version:       Version,
+			BuildDate:     BuildDate,
+			WeightVersion: task.WeightVersion,
 		},
 		Eval: AttestationEval{
 			Agent:     agent,
@@ -929,6 +1021,226 @@ func generateAttestation(
 	attestation.Integrity.ResultsHash = hashBytes(resultsJSON)
 
 	return attestation, nil
+}
+
+// LeaderboardSubmission is a compact format for submitting results to a leaderboard website.
+type LeaderboardSubmission struct {
+	// Identity
+	Agent     string `json:"agent"`
+	Model     string `json:"model,omitempty"`
+	Timestamp string `json:"timestamp"`
+
+	// Core metrics
+	PassRate         float64 `json:"pass_rate"`
+	WeightedPassRate float64 `json:"weighted_pass_rate"`
+	Passed           int     `json:"passed"`
+	Failed           int     `json:"failed"`
+	Total            int     `json:"total"`
+
+	// Weighted scoring
+	WeightedScore    float64 `json:"weighted_score"`
+	MaxPossibleScore float64 `json:"max_possible_score"`
+
+	// Quality metrics
+	CleanPasses         int `json:"clean_passes"`
+	PartialPasses       int `json:"partial_passes"`
+	IntegrityViolations int `json:"integrity_violations"`
+
+	// Per-language breakdown
+	ByLanguage map[string]LeaderboardLanguageStats `json:"by_language"`
+
+	// Timing
+	TotalDurationSec float64 `json:"total_duration_seconds"`
+	AgentDurationSec float64 `json:"agent_duration_seconds"`
+
+	// Verification
+	HarnessVersion string `json:"harness_version"`
+	WeightVersion  string `json:"weight_version"`
+	TasksHash      string `json:"tasks_hash"`
+	ResultsHash    string `json:"results_hash"`
+}
+
+// LeaderboardLanguageStats contains per-language metrics for the leaderboard.
+type LeaderboardLanguageStats struct {
+	Passed   int     `json:"passed"`
+	Failed   int     `json:"failed"`
+	Total    int     `json:"total"`
+	PassRate float64 `json:"pass_rate"`
+}
+
+// generateLeaderboardSubmission creates a compact submission file for leaderboard websites.
+func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttestation) LeaderboardSubmission {
+	submission := LeaderboardSubmission{
+		Agent:               summary.Agent,
+		Model:               summary.Model,
+		Timestamp:           summary.Timestamp,
+		PassRate:            summary.PassRate,
+		WeightedPassRate:    summary.WeightedPassRate,
+		Passed:              summary.Passed,
+		Failed:              summary.Failed,
+		Total:               summary.Total,
+		WeightedScore:       summary.WeightedScore,
+		MaxPossibleScore:    summary.MaxPossibleScore,
+		CleanPasses:         summary.CleanPasses,
+		PartialPasses:       summary.PartialPasses,
+		IntegrityViolations: summary.IntegrityViolations,
+		TotalDurationSec:    summary.Duration,
+		AgentDurationSec:    summary.AgentTime,
+		ByLanguage:          make(map[string]LeaderboardLanguageStats),
+	}
+
+	// Add verification data from attestation
+	if attestation != nil {
+		submission.HarnessVersion = attestation.Harness.Version
+		submission.WeightVersion = attestation.Harness.WeightVersion
+		submission.TasksHash = attestation.Integrity.TasksHash
+		submission.ResultsHash = attestation.Integrity.ResultsHash
+	}
+
+	// Convert language stats
+	for lang, agg := range summary.ByLanguage {
+		submission.ByLanguage[lang] = LeaderboardLanguageStats{
+			Passed:   agg.Passed,
+			Failed:   agg.Failed,
+			Total:    agg.Total,
+			PassRate: agg.PassRate,
+		}
+	}
+
+	return submission
+}
+
+// generateEvalReport creates a human-readable Markdown report for the evaluation.
+func generateEvalReport(summary EvalSummary, attestation *EvalAttestation) string {
+	var sb strings.Builder
+
+	sb.WriteString("# Evaluation Report\n\n")
+	writeReportSummary(&sb, summary)
+	writeReportQuality(&sb, summary)
+	writeReportByLanguage(&sb, summary)
+	writeReportByTier(&sb, summary)
+	writeReportTaskResults(&sb, summary)
+	writeReportErrors(&sb, summary)
+	writeReportVerification(&sb, attestation)
+	sb.WriteString("---\n")
+	sb.WriteString(fmt.Sprintf("*Generated by SanityHarness on %s*\n", summary.Timestamp))
+
+	return sb.String()
+}
+
+func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
+	sb.WriteString("## Summary\n\n")
+	sb.WriteString("| Metric | Value |\n")
+	sb.WriteString("|--------|-------|\n")
+	fmt.Fprintf(sb, "| Agent | **%s** |\n", summary.Agent)
+	if summary.Model != "" {
+		fmt.Fprintf(sb, "| Model | %s |\n", summary.Model)
+	}
+	fmt.Fprintf(sb, "| Timestamp | %s |\n", summary.Timestamp)
+	fmt.Fprintf(sb, "| Pass Rate | **%.1f%%** (%d/%d) |\n", summary.PassRate, summary.Passed, summary.Total)
+	fmt.Fprintf(sb, "| Weighted Pass Rate | **%.1f%%** |\n", summary.WeightedPassRate)
+	fmt.Fprintf(sb, "| Weighted Score | %.2f / %.2f |\n", summary.WeightedScore, summary.MaxPossibleScore)
+	fmt.Fprintf(sb, "| Duration | %.1fs |\n", summary.Duration)
+	sb.WriteString("\n")
+}
+
+func writeReportQuality(sb *strings.Builder, summary EvalSummary) {
+	sb.WriteString("## Quality Breakdown\n\n")
+	fmt.Fprintf(sb, "- **Clean Passes**: %d\n", summary.CleanPasses)
+	fmt.Fprintf(sb, "- **Partial Passes** (timed out but passed): %d\n", summary.PartialPasses)
+	fmt.Fprintf(sb, "- **Integrity Violations** (modified test files): %d\n", summary.IntegrityViolations)
+	fmt.Fprintf(sb, "- **Failures**: %d\n", summary.Failed-summary.IntegrityViolations-summary.PartialPasses)
+	sb.WriteString("\n")
+}
+
+func writeReportByLanguage(sb *strings.Builder, summary EvalSummary) {
+	sb.WriteString("## Results by Language\n\n")
+	sb.WriteString("| Language | Passed | Failed | Total | Pass Rate |\n")
+	sb.WriteString("|----------|--------|--------|-------|-----------|\n")
+	languages := make([]string, 0, len(summary.ByLanguage))
+	for lang := range summary.ByLanguage {
+		languages = append(languages, lang)
+	}
+	sort.Strings(languages)
+	for _, lang := range languages {
+		agg := summary.ByLanguage[lang]
+		fmt.Fprintf(sb, "| %s | %d | %d | %d | %.1f%% |\n",
+			lang, agg.Passed, agg.Failed, agg.Total, agg.PassRate)
+	}
+	sb.WriteString("\n")
+}
+
+func writeReportByTier(sb *strings.Builder, summary EvalSummary) {
+	if len(summary.ByTier) == 0 {
+		return
+	}
+	sb.WriteString("## Results by Tier\n\n")
+	sb.WriteString("| Tier | Passed | Failed | Total | Pass Rate |\n")
+	sb.WriteString("|------|--------|--------|-------|-----------|\n")
+	for _, tier := range []string{"core", "extended"} {
+		if agg, ok := summary.ByTier[tier]; ok {
+			fmt.Fprintf(sb, "| %s | %d | %d | %d | %.1f%% |\n",
+				tier, agg.Passed, agg.Failed, agg.Total, agg.PassRate)
+		}
+	}
+	sb.WriteString("\n")
+}
+
+func writeReportTaskResults(sb *strings.Builder, summary EvalSummary) {
+	sb.WriteString("## Task Results\n\n")
+	sb.WriteString("| Task | Status | Weight | Score | Duration |\n")
+	sb.WriteString("|------|--------|--------|-------|----------|\n")
+	for _, r := range summary.Results {
+		statusIcon, status := getResultStatusDisplay(r)
+		fmt.Fprintf(sb, "| %s | %s %s | %.2f | %.2f | %.1fs |\n",
+			r.Task, statusIcon, status, r.Weight, r.WeightedScore, r.Duration)
+	}
+	sb.WriteString("\n")
+}
+
+func getResultStatusDisplay(r EvalResult) (icon, text string) {
+	switch {
+	case r.Status == task.StatusIntegrityViolation:
+		return "🚫", "VIOLATION"
+	case r.Status == task.StatusPartialPass:
+		return "⚠️", "PARTIAL"
+	case r.Passed:
+		return "✅", "PASS"
+	default:
+		return "❌", "FAIL"
+	}
+}
+
+func writeReportErrors(sb *strings.Builder, summary EvalSummary) {
+	hasErrors := false
+	for _, r := range summary.Results {
+		if r.Error != "" {
+			hasErrors = true
+			break
+		}
+	}
+	if !hasErrors {
+		return
+	}
+	sb.WriteString("## Errors\n\n")
+	for _, r := range summary.Results {
+		if r.Error != "" {
+			fmt.Fprintf(sb, "### %s\n\n", r.Task)
+			fmt.Fprintf(sb, "```\n%s\n```\n\n", r.Error)
+		}
+	}
+}
+
+func writeReportVerification(sb *strings.Builder, attestation *EvalAttestation) {
+	if attestation == nil {
+		return
+	}
+	sb.WriteString("## Verification\n\n")
+	fmt.Fprintf(sb, "- **Harness Version**: %s\n", attestation.Harness.Version)
+	fmt.Fprintf(sb, "- **Weight Version**: %s\n", attestation.Harness.WeightVersion)
+	fmt.Fprintf(sb, "- **Tasks Hash**: `%s`\n", attestation.Integrity.TasksHash)
+	fmt.Fprintf(sb, "- **Results Hash**: `%s`\n", attestation.Integrity.ResultsHash)
+	sb.WriteString("\n")
 }
 
 func init() {
