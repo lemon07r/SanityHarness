@@ -67,7 +67,8 @@ var DefaultAgents = map[string]AgentConfig{
 		Command:           "droid",
 		Args:              []string{"exec", "--skip-permissions-unsafe", "{prompt}"},
 		ModelFlag:         "-m",
-		ModelFlagPosition: "before",
+		ModelFlagPosition: "after",                         // Must be after 'exec' subcommand
+		Env:               map[string]string{"CI": "true"}, // Disable Ink TTY mode
 	},
 	"iflow": {
 		Command:           "iflow",

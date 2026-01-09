@@ -631,6 +631,14 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model)
 
 	cmd.Dir = workspaceDir
+
+	// Use /dev/null for stdin to prevent TTY issues with agents that use Ink/React
+	devNull, err := os.Open(os.DevNull)
+	if err == nil {
+		cmd.Stdin = devNull
+		defer func() { _ = devNull.Close() }()
+	}
+
 	cmd.Stdout = nil // Suppress output
 	cmd.Stderr = nil
 
