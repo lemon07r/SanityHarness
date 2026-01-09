@@ -2,8 +2,8 @@
 AGENTS.md
 specifications.md
 
-# Binaries
-sanity
+# Binaries (root level only, not cmd/sanity/)
+/sanity
 *.exe
 *.exe~
 *.dll
