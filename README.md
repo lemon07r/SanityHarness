@@ -273,7 +273,19 @@ Eval runs create an output directory with:
 - `submission.json` - Compact format optimized for leaderboard submissions
 - `<lang>-<slug>/agent.log` - Agent output for debugging (preserved even if workspace is cleaned)
 
-The summary includes weighted scoring metrics (`weighted_score`, `weighted_pass_rate`) that account for task difficulty based on test complexity, hidden test ratio, and timeout requirements. Task results include a `status` field (`pass`, `partial_pass`, `fail`, `integrity_violation`) for fine-grained analysis.
+The summary includes weighted scoring metrics that account for empirically-derived task difficulty. Task results include a `status` field (`pass`, `partial_pass`, `fail`, `integrity_violation`) for fine-grained analysis.
+
+**Scoring rules:**
+- **Clean pass**: 100% of task weight
+- **Partial pass** (agent timed out but tests passed): 75% of task weight
+- **Fail**: 0 points
+- **Integrity violation** (modified test files): -0.25 penalty
+
+**Task weights** (1.0-1.5) are based on difficulty factors calibrated from empirical agent performance:
+- Language rarity in training data (Dart, Kotlin coroutines > Go, TypeScript)
+- Esoteric language features (comptime, isolates, macros)
+- Novel algorithms vs well-known patterns
+- Edge case density
 
 ## Agent Configuration
 

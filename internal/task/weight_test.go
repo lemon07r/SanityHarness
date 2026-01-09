@@ -8,92 +8,72 @@ func TestComputeWeight(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		task          *Task
-		testContent   []byte
-		hiddenContent []byte
-		minWeight     float64
-		maxWeight     float64
+		name      string
+		task      *Task
+		minWeight float64
+		maxWeight float64
 	}{
 		{
-			name: "basic_task_no_hidden_tests",
+			name: "known_task_go_bank_account",
 			task: &Task{
-				Slug:     "test-task",
+				Slug:     "bank-account",
 				Language: Go,
-				Tier:     "core",
 			},
-			testContent:   make([]byte, 100), // 100 lines equivalent
-			hiddenContent: nil,
-			minWeight:     1.0,
-			maxWeight:     1.5,
+			minWeight: 1.0,
+			maxWeight: 1.1,
 		},
 		{
-			name: "task_with_hidden_tests",
+			name: "known_task_dart_isolate_pool",
 			task: &Task{
-				Slug:     "test-task",
+				Slug:     "isolate-pool",
+				Language: Dart,
+			},
+			minWeight: 1.4,
+			maxWeight: 1.5,
+		},
+		{
+			name: "known_task_zig_comptime_json",
+			task: &Task{
+				Slug:     "comptime-json",
+				Language: Zig,
+			},
+			minWeight: 1.4,
+			maxWeight: 1.5, // Capped at MaxWeight
+		},
+		{
+			name: "unknown_task_gets_baseline",
+			task: &Task{
+				Slug:     "unknown-task",
 				Language: Go,
-				Tier:     "core",
-				Files: TaskFiles{
-					HiddenTest: []string{"hidden_test.go"},
-				},
 			},
-			testContent:   make([]byte, 100),
-			hiddenContent: make([]byte, 100),
-			minWeight:     1.5,
-			maxWeight:     2.2,
-		},
-		{
-			name: "extended_tier_task",
-			task: &Task{
-				Slug:     "test-task",
-				Language: Go,
-				Tier:     "extended",
-			},
-			testContent:   make([]byte, 100),
-			hiddenContent: nil,
-			minWeight:     1.2,
-			maxWeight:     1.7,
-		},
-		{
-			name: "task_with_extended_timeout",
-			task: &Task{
-				Slug:         "test-task",
-				Language:     Go,
-				Tier:         "core",
-				AgentTimeout: 300, // 180 seconds over default
-			},
-			testContent:   make([]byte, 100),
-			hiddenContent: nil,
-			minWeight:     1.0,
-			maxWeight:     1.8,
-		},
-		{
-			name: "complex_task_all_factors",
-			task: &Task{
-				Slug:         "complex-task",
-				Language:     Rust,
-				Tier:         "extended",
-				AgentTimeout: 240,
-				Files: TaskFiles{
-					HiddenTest: []string{"hidden_test.rs"},
-				},
-			},
-			testContent:   make([]byte, 200),
-			hiddenContent: make([]byte, 100),
-			minWeight:     1.8,
-			maxWeight:     2.5,
+			minWeight: 1.0,
+			maxWeight: 1.0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			weight := ComputeWeight(tt.task, tt.testContent, tt.hiddenContent)
+			weight := ComputeWeight(tt.task)
 			if weight.Base < tt.minWeight || weight.Base > tt.maxWeight {
 				t.Errorf("ComputeWeight() = %v, want between %v and %v",
 					weight.Base, tt.minWeight, tt.maxWeight)
 			}
 		})
+	}
+}
+
+func TestComputeWeightCap(t *testing.T) {
+	t.Parallel()
+
+	// zig/comptime-json has high factors but should be capped at 1.5
+	task := &Task{
+		Slug:     "comptime-json",
+		Language: Zig,
+	}
+	weight := ComputeWeight(task)
+	if weight.Base > MaxWeight {
+		t.Errorf("ComputeWeight() = %v, should be capped at %v", weight.Base, MaxWeight)
 	}
 }
 
@@ -151,7 +131,7 @@ func TestDetermineStatus(t *testing.T) {
 func TestScoreResult(t *testing.T) {
 	t.Parallel()
 
-	weight := Weight{Base: 2.0}
+	weight := Weight{Base: 1.5}
 
 	tests := []struct {
 		name          string
@@ -163,13 +143,13 @@ func TestScoreResult(t *testing.T) {
 		{
 			name:   "clean_pass",
 			passed: true,
-			want:   2.0,
+			want:   1.5,
 		},
 		{
 			name:          "partial_pass",
 			passed:        true,
 			agentTimedOut: true,
-			want:          1.4, // 2.0 * 0.7
+			want:          1.125, // 1.5 * 0.75
 		},
 		{
 			name:   "fail",
@@ -180,7 +160,7 @@ func TestScoreResult(t *testing.T) {
 			name:     "integrity_violation",
 			passed:   false,
 			errorMsg: "modified task files (disallowed): test.go",
-			want:     -0.5,
+			want:     -0.25, // ViolationPenalty
 		},
 	}
 
@@ -195,43 +175,16 @@ func TestScoreResult(t *testing.T) {
 	}
 }
 
-func TestCountLines(t *testing.T) {
+func TestScoringConstants(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		content []byte
-		want    int
-	}{
-		{
-			name:    "empty",
-			content: nil,
-			want:    0,
-		},
-		{
-			name:    "single_line",
-			content: []byte("hello"),
-			want:    1,
-		},
-		{
-			name:    "multiple_lines",
-			content: []byte("line1\nline2\nline3"),
-			want:    3,
-		},
-		{
-			name:    "trailing_newline",
-			content: []byte("line1\nline2\n"),
-			want:    3,
-		},
+	if PartialPassMultiplier != 0.75 {
+		t.Errorf("PartialPassMultiplier = %v, want 0.75", PartialPassMultiplier)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := countLines(tt.content)
-			if got != tt.want {
-				t.Errorf("countLines() = %v, want %v", got, tt.want)
-			}
-		})
+	if ViolationPenalty != 0.25 {
+		t.Errorf("ViolationPenalty = %v, want 0.25", ViolationPenalty)
+	}
+	if MaxWeight != 1.5 {
+		t.Errorf("MaxWeight = %v, want 1.5", MaxWeight)
 	}
 }

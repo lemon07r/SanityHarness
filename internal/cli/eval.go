@@ -722,38 +722,12 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	result.Attempts = len(session.Attempts)
 
 	// Compute task weight and score
-	testContent := loadTaskTestContent(loader, t)
-	hiddenContent := loadTaskHiddenTestContent(loader, t)
-	weight := task.ComputeWeight(t, testContent, hiddenContent)
+	weight := task.ComputeWeight(t)
 	result.Weight = weight.Base
 	result.Status = task.DetermineStatus(result.Passed, result.AgentTimedOut, result.Error)
 	result.WeightedScore = task.ScoreResult(result.Passed, result.AgentTimedOut, result.Error, weight)
 
 	return result
-}
-
-// loadTaskTestContent reads all public test file contents for weight calculation.
-func loadTaskTestContent(loader *task.Loader, t *task.Task) []byte {
-	var content []byte
-	for _, f := range t.Files.Test {
-		data, err := loader.ReadTaskFile(t, f)
-		if err == nil {
-			content = append(content, data...)
-		}
-	}
-	return content
-}
-
-// loadTaskHiddenTestContent reads all hidden test file contents for weight calculation.
-func loadTaskHiddenTestContent(loader *task.Loader, t *task.Task) []byte {
-	var content []byte
-	for _, f := range t.Files.HiddenTest {
-		data, err := loader.ReadTaskFile(t, f)
-		if err == nil {
-			content = append(content, data...)
-		}
-	}
-	return content
 }
 
 func buildAgentPrompt(t *task.Task) string {

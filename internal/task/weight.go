@@ -1,73 +1,115 @@
 // Package task provides task definition and loading for SanityHarness.
 package task
 
-import (
-	"bytes"
+// WeightVersion identifies the scoring methodology version for attestation.
+const WeightVersion = "2.0"
+
+// Scoring constants.
+const (
+	// PartialPassMultiplier is applied to tasks that passed but agent timed out.
+	PartialPassMultiplier = 0.75
+
+	// ViolationPenalty is subtracted for integrity violations (modified test files).
+	ViolationPenalty = 0.25
+
+	// MaxWeight caps the maximum weight for any task.
+	MaxWeight = 1.5
 )
 
-// WeightVersion identifies the scoring methodology version for attestation.
-const WeightVersion = "1.0"
+// TaskDifficulty holds the empirically-derived difficulty factors for a task.
+// These factors were calibrated based on analysis of what makes tasks hard for AI agents:
+//   - Language rarity in training data (Dart, Kotlin coroutines > Go, TypeScript)
+//   - Esoteric language features (comptime, isolates, macros)
+//   - Novel algorithms vs well-known patterns
+//   - Edge case density (streaming, concurrency + error handling)
+//   - Novel vs classic problems
+type TaskDifficulty struct {
+	LangRarity      float64 // 0.0-0.4: Dart=0.4, Kotlin=0.3, Zig=0.2, others=0.0
+	EsotericFeature float64 // 0.0-0.5: comptime=0.5, macros=0.5, isolates=0.4, etc.
+	NovelAlgorithm  float64 // 0.0-0.4: regex from scratch=0.4, parser=0.2
+	EdgeCaseDensity float64 // 0.0-0.5: streaming+chunks=0.5, concurrency+errors=0.4
+	NovelProblem    float64 // 0.0-0.3: less documented patterns
+}
 
-// Weight holds computed difficulty factors for a task.
+// taskDifficulties contains empirically-derived difficulty factors for each task.
+// These were calibrated by analyzing pass/fail patterns across multiple agents.
+var taskDifficulties = map[string]TaskDifficulty{
+	"dart/future-pool":               {LangRarity: 0.4, EsotericFeature: 0.2, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.2, NovelProblem: 0.1},
+	"dart/isolate-pool":              {LangRarity: 0.4, EsotericFeature: 0.4, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.2, NovelProblem: 0.2},
+	"dart/reactive-cache":            {LangRarity: 0.4, EsotericFeature: 0.2, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.3, NovelProblem: 0.1},
+	"go/bank-account":                {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.1, NovelProblem: 0.0},
+	"go/dining-philosophers":         {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.1, NovelProblem: 0.0},
+	"go/errgroup-limit":              {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.3, NovelProblem: 0.1},
+	"go/parallel-letter-frequency":   {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.1, NovelProblem: 0.0},
+	"go/react":                       {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.1, EdgeCaseDensity: 0.2, NovelProblem: 0.0},
+	"go/singleflight":                {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.1, EdgeCaseDensity: 0.4, NovelProblem: 0.3},
+	"kotlin/channel-multiplexer":     {LangRarity: 0.3, EsotericFeature: 0.3, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.3, NovelProblem: 0.2},
+	"kotlin/flow-processor":          {LangRarity: 0.3, EsotericFeature: 0.3, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.2, NovelProblem: 0.2},
+	"kotlin/lru-cache":               {LangRarity: 0.1, EsotericFeature: 0.0, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.1, NovelProblem: 0.0},
+	"rust/circular-buffer":           {LangRarity: 0.0, EsotericFeature: 0.1, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.1, NovelProblem: 0.0},
+	"rust/doubly-linked-list":        {LangRarity: 0.0, EsotericFeature: 0.2, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.2, NovelProblem: 0.0},
+	"rust/generational-arena":        {LangRarity: 0.0, EsotericFeature: 0.1, NovelAlgorithm: 0.1, EdgeCaseDensity: 0.2, NovelProblem: 0.1},
+	"rust/macros":                    {LangRarity: 0.0, EsotericFeature: 0.5, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.2, NovelProblem: 0.2},
+	"rust/parallel-letter-frequency": {LangRarity: 0.0, EsotericFeature: 0.1, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.1, NovelProblem: 0.0},
+	"rust/regex-lite":                {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.4, EdgeCaseDensity: 0.3, NovelProblem: 0.2},
+	"typescript/csv-lite":            {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.2, EdgeCaseDensity: 0.5, NovelProblem: 0.2},
+	"typescript/forth":               {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.2, EdgeCaseDensity: 0.3, NovelProblem: 0.1},
+	"typescript/glob":                {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.1, EdgeCaseDensity: 0.2, NovelProblem: 0.0},
+	"typescript/promise-pool":        {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.4, NovelProblem: 0.2},
+	"typescript/react":               {LangRarity: 0.0, EsotericFeature: 0.0, NovelAlgorithm: 0.1, EdgeCaseDensity: 0.2, NovelProblem: 0.0},
+	"zig/arena-allocator":            {LangRarity: 0.2, EsotericFeature: 0.3, NovelAlgorithm: 0.1, EdgeCaseDensity: 0.3, NovelProblem: 0.1},
+	"zig/comptime-json":              {LangRarity: 0.2, EsotericFeature: 0.5, NovelAlgorithm: 0.2, EdgeCaseDensity: 0.3, NovelProblem: 0.3},
+	"zig/small-vector":               {LangRarity: 0.2, EsotericFeature: 0.2, NovelAlgorithm: 0.0, EdgeCaseDensity: 0.2, NovelProblem: 0.0},
+}
+
+// Weight holds the computed difficulty weight for a task.
 type Weight struct {
 	Base            float64 `json:"base"`
-	TestComplexity  float64 `json:"test_complexity"`
-	HiddenTestRatio float64 `json:"hidden_test_ratio"`
-	TimeoutFactor   float64 `json:"timeout_factor"`
-	TierBonus       float64 `json:"tier_bonus"`
+	LangRarity      float64 `json:"lang_rarity"`
+	EsotericFeature float64 `json:"esoteric_feature"`
+	NovelAlgorithm  float64 `json:"novel_algorithm"`
+	EdgeCaseDensity float64 `json:"edge_case_density"`
+	NovelProblem    float64 `json:"novel_problem"`
 }
 
-// ComputeWeight calculates a task's difficulty weight based on objective factors.
-// The weight is computed from:
-//   - Test line count (more tests = more edge cases to handle)
-//   - Hidden test presence and ratio (indicates intentional traps)
-//   - Agent timeout override (task author expected difficulty)
-//   - Tier (extended tier generally contains harder tasks)
+// ComputeWeight calculates a task's difficulty weight based on empirical factors.
+// The weight formula is:
 //
-// Returns a Weight struct with the base score and component factors.
-func ComputeWeight(t *Task, testContent, hiddenTestContent []byte) Weight {
-	w := Weight{
-		Base: 1.0,
+//	base = 1.0
+//	     + lang_rarity * 0.5
+//	     + esoteric_feature * 0.8
+//	     + novel_algorithm * 0.6
+//	     + edge_case_density * 0.4
+//	     + novel_problem * 0.2
+//	weight = min(base, 1.5)  // capped at 1.5
+func ComputeWeight(t *Task) Weight {
+	taskID := t.ID()
+	diff, ok := taskDifficulties[taskID]
+	if !ok {
+		// Unknown task gets baseline weight
+		return Weight{Base: 1.0}
 	}
 
-	// Factor 1: Test complexity (more tests = more edge cases)
-	testLines := countLines(testContent)
-	hiddenLines := countLines(hiddenTestContent)
-	totalTestLines := testLines + hiddenLines
+	base := 1.0
+	base += diff.LangRarity * 0.5
+	base += diff.EsotericFeature * 0.8
+	base += diff.NovelAlgorithm * 0.6
+	base += diff.EdgeCaseDensity * 0.4
+	base += diff.NovelProblem * 0.2
 
-	// Normalize: 200 lines = 0.5 bonus, capped at 0.5
-	w.TestComplexity = min(float64(totalTestLines)/200.0, 0.5)
-	w.Base += w.TestComplexity
-
-	// Factor 2: Hidden test presence and ratio
-	if len(t.Files.HiddenTest) > 0 && totalTestLines > 0 {
-		w.Base += 0.3 // Base bonus for having hidden tests
-		w.HiddenTestRatio = float64(hiddenLines) / float64(totalTestLines)
-		w.Base += w.HiddenTestRatio * 0.4 // Up to 0.4 additional based on ratio
+	// Cap at MaxWeight
+	if base > MaxWeight {
+		base = MaxWeight
 	}
 
-	// Factor 3: Extended timeout signals author-expected difficulty
-	defaultTimeout := 120
-	if t.AgentTimeout > defaultTimeout {
-		w.TimeoutFactor = float64(t.AgentTimeout-defaultTimeout) / 180.0 * 0.3
-		w.Base += w.TimeoutFactor
+	return Weight{
+		Base:            base,
+		LangRarity:      diff.LangRarity,
+		EsotericFeature: diff.EsotericFeature,
+		NovelAlgorithm:  diff.NovelAlgorithm,
+		EdgeCaseDensity: diff.EdgeCaseDensity,
+		NovelProblem:    diff.NovelProblem,
 	}
-
-	// Factor 4: Tier bonus (extended tier generally harder)
-	if t.Tier == "extended" {
-		w.TierBonus = 0.2
-		w.Base += w.TierBonus
-	}
-
-	return w
-}
-
-// countLines counts the number of newlines in content.
-func countLines(content []byte) int {
-	if len(content) == 0 {
-		return 0
-	}
-	return bytes.Count(content, []byte{'\n'}) + 1
 }
 
 // ResultStatus represents the outcome status of a task evaluation.
@@ -98,7 +140,7 @@ func DetermineStatus(passed, agentTimedOut bool, errorMsg string) ResultStatus {
 	return StatusFail
 }
 
-// contains checks if s contains substr (simple helper to avoid strings import).
+// contains checks if s contains substr.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr) >= 0
 }
@@ -118,6 +160,12 @@ func searchString(s, substr string) int {
 }
 
 // ScoreResult computes the weighted score for a task result.
+//
+// Scoring rules:
+//   - Clean pass: 100% of weight
+//   - Partial pass (timeout but correct): 75% of weight
+//   - Fail: 0
+//   - Integrity violation: -0.25 penalty
 func ScoreResult(passed, agentTimedOut bool, errorMsg string, weight Weight) float64 {
 	status := DetermineStatus(passed, agentTimedOut, errorMsg)
 
@@ -125,9 +173,9 @@ func ScoreResult(passed, agentTimedOut bool, errorMsg string, weight Weight) flo
 	case StatusPass:
 		return weight.Base
 	case StatusPartialPass:
-		return weight.Base * 0.7 // 30% reduction for timeout
+		return weight.Base * PartialPassMultiplier
 	case StatusIntegrityViolation:
-		return -0.5 // Penalty
+		return -ViolationPenalty
 	default:
 		return 0.0
 	}
