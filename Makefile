@@ -37,7 +37,7 @@ LDFLAGS := -s -w \
 PLATFORMS := linux/amd64 darwin/arm64 windows/amd64
 
 # Tool versions (for CI reproducibility)
-GOLANGCI_LINT_VERSION := v2.1.6
+GOLANGCI_LINT_VERSION := v2.7.2
 
 # -----------------------------------------------------------------------------
 # ANSI Color Codes
