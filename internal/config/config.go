@@ -53,7 +53,7 @@ var DefaultAgents = map[string]AgentConfig{
 	},
 	"crush": {
 		Command:           "crush",
-		Args:              []string{"-y", "run", "{prompt}"},
+		Args:              []string{"run", "{prompt}"},
 		ModelFlag:         "",
 		ModelFlagPosition: "",
 	},
