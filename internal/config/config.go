@@ -85,8 +85,8 @@ var DefaultAgents = map[string]AgentConfig{
 	"amp": {
 		Command:           "amp",
 		Args:              []string{"--dangerously-allow-all", "-x", "{prompt}"},
-		ModelFlag:         "",
-		ModelFlagPosition: "",
+		ModelFlag:         "-m",
+		ModelFlagPosition: "before",
 	},
 }
 

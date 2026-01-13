@@ -306,7 +306,7 @@ SanityHarness supports 11 built-in agents. Custom agents can be configured in `s
 | `droid` | Factory Droid CLI |
 | `iflow` | iFlow CLI |
 | `qwen` | Qwen Code CLI |
-| `amp` | Sourcegraph Amp CLI |
+| `amp` | Sourcegraph Amp CLI (modes: `smart`, `rush`, `free`) |
 
 ### Custom Agent Configuration
 
