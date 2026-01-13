@@ -37,6 +37,7 @@ var (
 	evalKeepWorkspaces bool
 	evalParallel       int
 	evalDryRun         bool
+	evalUseMCPTools    bool
 )
 
 // EvalResult holds the result of evaluating a single task.
@@ -96,6 +97,7 @@ type EvalSummary struct {
 	ByLanguage          map[string]EvalAggregate `json:"by_language,omitempty"`
 	ByTier              map[string]EvalAggregate `json:"by_tier,omitempty"`
 	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
+	UseMCPTools         bool                     `json:"use_mcp_tools,omitempty"`
 }
 
 var evalCmd = &cobra.Command{
@@ -114,6 +116,7 @@ Built-in agents:
   droid     - Factory Droid CLI
   iflow     - iFlow CLI
   qwen      - Qwen Code CLI
+  amp       - Sourcegraph Amp CLI
 
 Custom agents can be configured in sanity.toml under [agents.<name>].
 
@@ -530,6 +533,7 @@ Examples:
 			ByLanguage:          finalize(byLanguage),
 			ByTier:              finalize(byTier),
 			ByDifficulty:        finalize(byDifficulty),
+			UseMCPTools:         evalUseMCPTools,
 		}
 
 		summaryPath := filepath.Join(evalOutputDir, "summary.json")
@@ -606,7 +610,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	}
 
 	// Build agent command
-	prompt := buildAgentPrompt(t)
+	prompt := buildAgentPrompt(t, evalUseMCPTools)
 	result.PromptChars = utf8.RuneCountInString(prompt)
 
 	agentTimeout := time.Duration(timeout) * time.Second
@@ -738,7 +742,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	return result
 }
 
-func buildAgentPrompt(t *task.Task) string {
+func buildAgentPrompt(t *task.Task, useMCPTools bool) string {
 	stubFiles := make([]string, 0, len(t.Files.Stub))
 	for _, f := range t.Files.Stub {
 		stubFiles = append(stubFiles, task.StripTxtExtension(f))
@@ -748,7 +752,7 @@ func buildAgentPrompt(t *task.Task) string {
 		testFiles = append(testFiles, task.StripTxtExtension(f))
 	}
 
-	return fmt.Sprintf(`You are solving a coding task called "%s".
+	prompt := fmt.Sprintf(`You are solving a coding task called "%s".
 
 TASK INFO:
 - Language:    %s
@@ -783,6 +787,22 @@ RULES:
 		t.Name, t.Language, t.Tier, t.Difficulty, t.Description,
 		strings.Join(stubFiles, ", "), strings.Join(testFiles, ", "),
 		t.Language)
+
+	// Append MCP tools section if enabled
+	if useMCPTools {
+		prompt += `
+
+MCP TOOLS:
+You have access to MCP (Model Context Protocol) tools. Use them proactively:
+- Use file reading tools to examine stub files and test files thoroughly
+- Use code search tools to find patterns, helper functions, or related implementations
+- Use any available analysis tools to understand the codebase structure
+- Prefer using tools to gather context over making assumptions
+
+Do NOT guess at implementation details that tools can help you discover.`
+	}
+
+	return prompt
 }
 
 func detectModifiedTaskFiles(loader *task.Loader, t *task.Task, workspaceDir string) ([]string, error) {
@@ -977,7 +997,7 @@ func generateAttestation(
 		// Hash solution files if they exist
 		var solutionHash string
 		workspaceDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
-		var solutionPaths []string
+		solutionPaths := make([]string, 0, len(t.Files.Stub))
 		for _, f := range t.Files.Stub {
 			solutionPaths = append(solutionPaths, filepath.Join(workspaceDir, task.StripTxtExtension(f)))
 		}
@@ -1040,6 +1060,9 @@ type LeaderboardSubmission struct {
 	WeightVersion  string `json:"weight_version"`
 	TasksHash      string `json:"tasks_hash"`
 	ResultsHash    string `json:"results_hash"`
+
+	// Configuration
+	UseMCPTools bool `json:"use_mcp_tools,omitempty"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -1079,6 +1102,9 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		submission.ResultsHash = attestation.Integrity.ResultsHash
 	}
 
+	// Add configuration flags
+	submission.UseMCPTools = summary.UseMCPTools
+
 	// Convert language stats
 	for lang, agg := range summary.ByLanguage {
 		submission.ByLanguage[lang] = LeaderboardLanguageStats{
@@ -1117,6 +1143,9 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	fmt.Fprintf(sb, "| Agent | **%s** |\n", summary.Agent)
 	if summary.Model != "" {
 		fmt.Fprintf(sb, "| Model | %s |\n", summary.Model)
+	}
+	if summary.UseMCPTools {
+		sb.WriteString("| MCP Tools Mode | Yes |\n")
 	}
 	fmt.Fprintf(sb, "| Timestamp | %s |\n", summary.Timestamp)
 	fmt.Fprintf(sb, "| Pass Rate | **%.1f%%** (%d/%d) |\n", summary.PassRate, summary.Passed, summary.Total)
@@ -1237,4 +1266,5 @@ func init() {
 	evalCmd.Flags().StringVar(&evalOutputDir, "output", "", "output directory for results")
 	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
 	evalCmd.Flags().BoolVar(&evalDryRun, "dry-run", false, "show what tasks would be run without executing")
+	evalCmd.Flags().BoolVar(&evalUseMCPTools, "use-mcp-tools", false, "inject MCP tool usage instructions into agent prompt")
 }

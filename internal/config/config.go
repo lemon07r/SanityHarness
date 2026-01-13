@@ -82,6 +82,12 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlag:         "-m",
 		ModelFlagPosition: "before",
 	},
+	"amp": {
+		Command:           "amp",
+		Args:              []string{"--dangerously-allow-all", "-x", "{prompt}"},
+		ModelFlag:         "",
+		ModelFlagPosition: "",
+	},
 }
 
 // Config holds all configuration for SanityHarness.

@@ -85,7 +85,7 @@ make build
 #### Evaluate an Agent
 
 ```bash
-# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen
+# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, amp
 ./sanity eval --agent gemini
 ./sanity eval --agent gemini --model gemini-2.5-pro
 ./sanity eval --agent opencode --model google/gemini-2.5-flash
@@ -95,6 +95,7 @@ make build
 ./sanity eval --agent gemini --tasks go/react,typescript/react
 ./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
 ./sanity eval --agent gemini --dry-run          # Show tasks without running
+./sanity eval --agent gemini --use-mcp-tools    # Enable MCP tools mode
 ```
 
 #### Verify a Submission
@@ -289,7 +290,7 @@ The summary includes weighted scoring metrics that account for empirically-deriv
 
 ## Agent Configuration
 
-SanityHarness supports 10 built-in agents. Custom agents can be configured in `sanity.toml`:
+SanityHarness supports 11 built-in agents. Custom agents can be configured in `sanity.toml`:
 
 ### Built-in Agents
 
@@ -305,6 +306,7 @@ SanityHarness supports 10 built-in agents. Custom agents can be configured in `s
 | `droid` | Factory Droid CLI |
 | `iflow` | iFlow CLI |
 | `qwen` | Qwen Code CLI |
+| `amp` | Sourcegraph Amp CLI |
 
 ### Custom Agent Configuration
 

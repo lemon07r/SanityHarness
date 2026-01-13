@@ -86,7 +86,8 @@ func (t *Task) HiddenTestFiles() []string {
 
 // ValidationCommand returns the full command to run for validation.
 func (t *Task) ValidationCommand() []string {
-	cmd := []string{t.Validation.Command}
+	cmd := make([]string, 0, 1+len(t.Validation.Args))
+	cmd = append(cmd, t.Validation.Command)
 	cmd = append(cmd, t.Validation.Args...)
 	return cmd
 }
