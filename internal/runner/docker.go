@@ -30,11 +30,20 @@ type DockerClient struct {
 	client *client.Client
 }
 
-// NewDockerClient creates a new Docker client.
+// NewDockerClient creates a new Docker client and verifies the daemon is accessible.
 func NewDockerClient() (*DockerClient, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("creating docker client: %w", err)
+	}
+
+	// Verify Docker daemon is accessible immediately to fail fast
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := cli.Ping(ctx); err != nil {
+		_ = cli.Close()
+		return nil, fmt.Errorf("docker daemon not accessible (is Docker running?): %w", err)
 	}
 
 	return &DockerClient{client: cli}, nil

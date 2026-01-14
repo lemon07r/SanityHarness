@@ -175,10 +175,6 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 		return nil, fmt.Errorf("no image configured for language: %s", t.Language)
 	}
 
-	if err := r.docker.Ping(ctx); err != nil {
-		return nil, err
-	}
-
 	// Ensure image is available
 	r.logger.Info("ensuring container image", "image", imageName)
 	if err := r.docker.EnsureImage(ctx, imageName, r.cfg.Docker.AutoPull); err != nil {
