@@ -28,6 +28,7 @@ import (
 var (
 	evalAgent          string
 	evalModel          string
+	evalReasoning      string
 	evalTasks          string
 	evalLang           string
 	evalTier           string
@@ -75,6 +76,7 @@ type EvalAggregate struct {
 type EvalSummary struct {
 	Agent               string                   `json:"agent"`
 	Model               string                   `json:"model,omitempty"`
+	Reasoning           string                   `json:"reasoning,omitempty"`
 	Timestamp           string                   `json:"timestamp"`
 	Tier                string                   `json:"tier,omitempty"`
 	Difficulty          string                   `json:"difficulty,omitempty"`
@@ -511,6 +513,7 @@ Examples:
 		summary := EvalSummary{
 			Agent:               evalAgent,
 			Model:               evalModel,
+			Reasoning:           evalReasoning,
 			Timestamp:           timestamp,
 			Tier:                evalTier,
 			Difficulty:          evalDifficulty,
@@ -632,7 +635,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		return result
 	}
 
-	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model)
+	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning)
 
 	cmd.Dir = workspaceDir
 
@@ -846,19 +849,37 @@ func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir s
 }
 
 // buildAgentCommand creates an exec.Cmd for the given agent configuration.
-// It handles prompt placeholder substitution, model flag positioning, and environment variables.
-func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt, model string) *exec.Cmd {
+// It handles prompt placeholder substitution, model flag positioning, reasoning flag, and environment variables.
+func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt, model, reasoning string) *exec.Cmd {
 	var args []string
 
 	// Determine model flag position (default to "before")
-	position := agentCfg.ModelFlagPosition
-	if position == "" {
-		position = "before"
+	modelPosition := agentCfg.ModelFlagPosition
+	if modelPosition == "" {
+		modelPosition = "before"
+	}
+
+	// Determine reasoning flag position (default to "before")
+	reasoningPosition := agentCfg.ReasoningFlagPosition
+	if reasoningPosition == "" {
+		reasoningPosition = "before"
 	}
 
 	// Add model flag if specified (before position)
-	if model != "" && agentCfg.ModelFlag != "" && position == "before" {
+	if model != "" && agentCfg.ModelFlag != "" && modelPosition == "before" {
 		args = append(args, agentCfg.ModelFlag, model)
+	}
+
+	// Add reasoning flag if specified (before position)
+	// If ReasoningFlag contains {value}, substitute it; otherwise append as separate arg
+	if reasoning != "" && agentCfg.ReasoningFlag != "" && reasoningPosition == "before" {
+		if strings.Contains(agentCfg.ReasoningFlag, "{value}") {
+			// Format: "-c key={value}" -> "-c key=high"
+			args = append(args, strings.ReplaceAll(agentCfg.ReasoningFlag, "{value}", reasoning))
+		} else {
+			// Format: "-r" "high"
+			args = append(args, agentCfg.ReasoningFlag, reasoning)
+		}
 	}
 
 	// Process args, replacing {prompt} placeholder
@@ -871,8 +892,20 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	}
 
 	// Add model flag if specified (after position)
-	if model != "" && agentCfg.ModelFlag != "" && position == "after" {
+	if model != "" && agentCfg.ModelFlag != "" && modelPosition == "after" {
 		args = append(args, agentCfg.ModelFlag, model)
+	}
+
+	// Add reasoning flag if specified (after position)
+	// If ReasoningFlag contains {value}, substitute it; otherwise append as separate arg
+	if reasoning != "" && agentCfg.ReasoningFlag != "" && reasoningPosition == "after" {
+		if strings.Contains(agentCfg.ReasoningFlag, "{value}") {
+			// Format: "-c key={value}" -> "-c key=high"
+			args = append(args, strings.ReplaceAll(agentCfg.ReasoningFlag, "{value}", reasoning))
+		} else {
+			// Format: "-r" "high"
+			args = append(args, agentCfg.ReasoningFlag, reasoning)
+		}
 	}
 
 	cmd := exec.CommandContext(ctx, agentCfg.Command, args...)
@@ -1030,6 +1063,7 @@ type LeaderboardSubmission struct {
 	// Identity
 	Agent     string `json:"agent"`
 	Model     string `json:"model,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
 	Timestamp string `json:"timestamp"`
 
 	// Core metrics
@@ -1078,6 +1112,7 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 	submission := LeaderboardSubmission{
 		Agent:               summary.Agent,
 		Model:               summary.Model,
+		Reasoning:           summary.Reasoning,
 		Timestamp:           summary.Timestamp,
 		PassRate:            summary.PassRate,
 		WeightedPassRate:    summary.WeightedPassRate,
@@ -1143,6 +1178,9 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	fmt.Fprintf(sb, "| Agent | **%s** |\n", summary.Agent)
 	if summary.Model != "" {
 		fmt.Fprintf(sb, "| Model | %s |\n", summary.Model)
+	}
+	if summary.Reasoning != "" {
+		fmt.Fprintf(sb, "| Reasoning Effort | %s |\n", summary.Reasoning)
 	}
 	if summary.UseMCPTools {
 		sb.WriteString("| MCP Tools Mode | Yes |\n")
@@ -1257,6 +1295,7 @@ func writeReportVerification(sb *strings.Builder, attestation *EvalAttestation) 
 func init() {
 	evalCmd.Flags().StringVar(&evalAgent, "agent", "", "agent to evaluate (see --help for list)")
 	evalCmd.Flags().StringVar(&evalModel, "model", "", "model to use (e.g., gemini-2.5-pro or google/gemini-2.5-flash)")
+	evalCmd.Flags().StringVar(&evalReasoning, "reasoning", "", "reasoning effort level (e.g., off, none, low, medium, high)")
 	evalCmd.Flags().StringVar(&evalTasks, "tasks", "", "comma-separated list of task slugs")
 	evalCmd.Flags().StringVar(&evalLang, "lang", "", "filter by language (go, rust, typescript)")
 	evalCmd.Flags().StringVar(&evalTier, "tier", "core", "filter by tier (core, extended, all)")

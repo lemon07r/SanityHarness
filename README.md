@@ -76,19 +76,19 @@ make build
 
 ```bash
 # Show results from a previous run
-./sanity show sessions/bank-account-2024-12-30T143022
+./sanity show sessions/bank-account-2026-01-15T143022
 
 # Output as JSON
-./sanity show sessions/bank-account-2024-12-30T143022 --json
+./sanity show sessions/bank-account-2026-01-15T143022 --json
 ```
 
 #### Evaluate an Agent
 
 ```bash
-# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, amp
+# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, amp, codebuff
 ./sanity eval --agent gemini
-./sanity eval --agent gemini --model gemini-2.5-pro
-./sanity eval --agent opencode --model google/gemini-2.5-flash
+./sanity eval --agent gemini --model gemini-3-pro
+./sanity eval --agent opencode --model google/gemini-3-flash
 ./sanity eval --agent claude --lang go
 ./sanity eval --agent gemini --tier all --parallel 4
 ./sanity eval --agent gemini --difficulty hard,expert
@@ -96,6 +96,7 @@ make build
 ./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
 ./sanity eval --agent gemini --dry-run          # Show tasks without running
 ./sanity eval --agent gemini --use-mcp-tools    # Enable MCP tools mode
+./sanity eval --agent droid --reasoning high    # Set reasoning effort (droid only)
 ```
 
 #### Verify a Submission
@@ -251,7 +252,7 @@ Each run creates a session directory with:
 Example session structure:
 ```
 sessions/
-└── go-bank-account-2024-12-30T143022-a1b2c3d4/
+└── go-bank-account-2026-01-15T143022-a1b2c3d4/
     ├── result.json
     ├── report.md
     ├── logs/
@@ -290,7 +291,7 @@ The summary includes weighted scoring metrics that account for empirically-deriv
 
 ## Agent Configuration
 
-SanityHarness supports 11 built-in agents. Custom agents can be configured in `sanity.toml`:
+SanityHarness supports 12 built-in agents. Custom agents can be configured in `sanity.toml`:
 
 ### Built-in Agents
 
@@ -307,6 +308,7 @@ SanityHarness supports 11 built-in agents. Custom agents can be configured in `s
 | `iflow` | iFlow CLI |
 | `qwen` | Qwen Code CLI |
 | `amp` | Sourcegraph Amp CLI (modes: `smart`, `rush`, `free`) |
+| `codebuff` | Codebuff CLI (multi-agent AI coding assistant) |
 
 ### Custom Agent Configuration
 
@@ -314,7 +316,7 @@ SanityHarness supports 11 built-in agents. Custom agents can be configured in `s
 # Override a built-in agent
 [agents.gemini]
 command = "gemini"
-args = ["--yolo", "--model", "gemini-2.5-pro", "{prompt}"]
+args = ["--yolo", "--model", "gemini-3-pro", "{prompt}"]
 
 # Add a custom agent
 [agents.my-agent]

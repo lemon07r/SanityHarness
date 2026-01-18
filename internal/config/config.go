@@ -12,11 +12,13 @@ import (
 
 // AgentConfig defines how to invoke a coding agent.
 type AgentConfig struct {
-	Command           string            `toml:"command"`             // Binary name or path
-	Args              []string          `toml:"args"`                // Args with {prompt} placeholder
-	ModelFlag         string            `toml:"model_flag"`          // e.g., "--model", "-m"
-	ModelFlagPosition string            `toml:"model_flag_position"` // "before" (default) or "after"
-	Env               map[string]string `toml:"env"`                 // Environment variables
+	Command               string            `toml:"command"`                 // Binary name or path
+	Args                  []string          `toml:"args"`                    // Args with {prompt} placeholder
+	ModelFlag             string            `toml:"model_flag"`              // e.g., "--model", "-m"
+	ModelFlagPosition     string            `toml:"model_flag_position"`     // "before" (default) or "after"
+	ReasoningFlag         string            `toml:"reasoning_flag"`          // e.g., "-r", "--reasoning-effort"
+	ReasoningFlagPosition string            `toml:"reasoning_flag_position"` // "before" (default) or "after"
+	Env                   map[string]string `toml:"env"`                     // Environment variables
 }
 
 // DefaultAgents provides built-in configurations for popular coding agents.
@@ -40,10 +42,12 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition: "before",
 	},
 	"codex": {
-		Command:           "codex",
-		Args:              []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "{prompt}"},
-		ModelFlag:         "-m",
-		ModelFlagPosition: "before",
+		Command:               "codex",
+		Args:                  []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "{prompt}"},
+		ModelFlag:             "-m",
+		ModelFlagPosition:     "before",
+		ReasoningFlag:         "-c model_reasoning_effort={value}", // Reasoning: minimal, low, medium, high, xhigh
+		ReasoningFlagPosition: "before",
 	},
 	"kimi": {
 		Command:           "kimi",
@@ -64,11 +68,13 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition: "before",
 	},
 	"droid": {
-		Command:           "droid",
-		Args:              []string{"exec", "--skip-permissions-unsafe", "{prompt}"},
-		ModelFlag:         "-m",
-		ModelFlagPosition: "after",                         // Must be after 'exec' subcommand
-		Env:               map[string]string{"CI": "true"}, // Disable Ink TTY mode
+		Command:               "droid",
+		Args:                  []string{"exec", "--skip-permissions-unsafe", "{prompt}"},
+		ModelFlag:             "-m",
+		ModelFlagPosition:     "after",                         // Must be after 'exec' subcommand
+		ReasoningFlag:         "-r",                            // Reasoning effort: off, none, low, medium, high
+		ReasoningFlagPosition: "after",                         // Must be after 'exec' subcommand
+		Env:                   map[string]string{"CI": "true"}, // Disable Ink TTY mode
 	},
 	"iflow": {
 		Command:           "iflow",
@@ -87,6 +93,12 @@ var DefaultAgents = map[string]AgentConfig{
 		Args:              []string{"--dangerously-allow-all", "-x", "{prompt}"},
 		ModelFlag:         "-m",
 		ModelFlagPosition: "before",
+	},
+	"codebuff": {
+		Command:           "codebuff",
+		Args:              []string{"-p", "{prompt}"},
+		ModelFlag:         "",
+		ModelFlagPosition: "",
 	},
 }
 
