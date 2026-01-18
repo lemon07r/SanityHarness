@@ -97,8 +97,8 @@ var DefaultAgents = map[string]AgentConfig{
 	"codebuff": {
 		Command:           "codebuff",
 		Args:              []string{"-p", "{prompt}"},
-		ModelFlag:         "",
-		ModelFlagPosition: "",
+		ModelFlag:         "--{value}",
+		ModelFlagPosition: "before",
 	},
 }
 

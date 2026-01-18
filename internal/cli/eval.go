@@ -866,8 +866,15 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	}
 
 	// Add model flag if specified (before position)
+	// If ModelFlag contains {value}, substitute it; otherwise append as separate arg
 	if model != "" && agentCfg.ModelFlag != "" && modelPosition == "before" {
-		args = append(args, agentCfg.ModelFlag, model)
+		if strings.Contains(agentCfg.ModelFlag, "{value}") {
+			// Format: "--{value}" -> "--max" (single arg with value substituted)
+			args = append(args, strings.ReplaceAll(agentCfg.ModelFlag, "{value}", model))
+		} else {
+			// Format: "-m" "model-name" (two separate args)
+			args = append(args, agentCfg.ModelFlag, model)
+		}
 	}
 
 	// Add reasoning flag if specified (before position)
@@ -892,8 +899,15 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	}
 
 	// Add model flag if specified (after position)
+	// If ModelFlag contains {value}, substitute it; otherwise append as separate arg
 	if model != "" && agentCfg.ModelFlag != "" && modelPosition == "after" {
-		args = append(args, agentCfg.ModelFlag, model)
+		if strings.Contains(agentCfg.ModelFlag, "{value}") {
+			// Format: "--{value}" -> "--max" (single arg with value substituted)
+			args = append(args, strings.ReplaceAll(agentCfg.ModelFlag, "{value}", model))
+		} else {
+			// Format: "-m" "model-name" (two separate args)
+			args = append(args, agentCfg.ModelFlag, model)
+		}
 	}
 
 	// Add reasoning flag if specified (after position)

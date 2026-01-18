@@ -97,6 +97,7 @@ make build
 ./sanity eval --agent gemini --dry-run          # Show tasks without running
 ./sanity eval --agent gemini --use-mcp-tools    # Enable MCP tools mode
 ./sanity eval --agent droid --reasoning high    # Set reasoning effort (droid only)
+./sanity eval --agent codebuff --model max      # Use codebuff max quality mode
 ```
 
 #### Verify a Submission
@@ -308,7 +309,7 @@ SanityHarness supports 12 built-in agents. Custom agents can be configured in `s
 | `iflow` | iFlow CLI |
 | `qwen` | Qwen Code CLI |
 | `amp` | Sourcegraph Amp CLI (modes: `smart`, `rush`, `free`) |
-| `codebuff` | Codebuff CLI (multi-agent AI coding assistant) |
+| `codebuff` | Codebuff CLI (modes: `max`, `lite`) |
 
 ### Custom Agent Configuration
 
