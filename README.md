@@ -1,7 +1,6 @@
 # SanityHarness
-
-A lightweight evaluation harness written in Go for coding agents that runs a diverse set of high-signal, compact but hard problems in isolated Docker containers. This evaluation takes roughly only 1 hour to run without any concurrency, and can be greatly sped up with the parallel eval flag. 
 ![sanity-banner](https://github.com/user-attachments/assets/b0f8572d-a5fc-4b39-959a-c573e421af17)
+A lightweight evaluation harness written in Go for coding agents that runs a diverse set of high-signal, compact but hard problems in isolated Docker containers. This evaluation takes roughly only 1 hour to run without any concurrency, and can be greatly sped up with the parallel eval flag. 
 
 ## Features
 
