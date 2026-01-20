@@ -1,19 +1,41 @@
 # SanityHarness
+
 ![sanity-banner](https://github.com/user-attachments/assets/b0f8572d-a5fc-4b39-959a-c573e421af17)
-A lightweight evaluation harness written in Go for coding agents that runs a diverse set of high-signal, compact but hard problems in isolated Docker containers. This evaluation takes roughly only 1 hour to run without any concurrency, and can be greatly sped up with the parallel eval flag. 
+
+[![CI](https://github.com/lemon07r/sanityharness/actions/workflows/ci.yml/badge.svg)](https://github.com/lemon07r/sanityharness/actions/workflows/ci.yml)
+[![Go 1.25+](https://img.shields.io/github/go-mod/go-version/lemon07r/sanityharness)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/lemon07r/sanityharness)](https://github.com/lemon07r/sanityharness/releases)
+
+A lightweight evaluation harness for coding agents that runs high-signal, compact but challenging problems in isolated Docker containers. Evaluate agents across 26 tasks in 6 languages with weighted scoring, integrity verification, and detailed reporting.
+
+<!-- Add demo GIF/screenshot here -->
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Available Tasks](#available-tasks)
+- [Configuration](#configuration)
+- [Agents](#agents)
+- [How It Works](#how-it-works)
+- [Output](#output)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
-- **Isolated Execution**: Each task runs in a Docker container
-- **Multi-Language Support**: Go, Rust, TypeScript, Kotlin, Dart, and Zig tasks (26 total)
-- **Watch Mode**: Automatically re-run tests when files change
-- **Session Tracking**: JSON and Markdown reports with full audit trail
-- **Error Summarization**: Language-specific error extraction
-- **Hidden Tests**: Tasks can include hidden tests only applied during `sanity eval`
-- **Eval Integrity Checks**: Agents cannot modify test/support files
-- **Task Metadata & Filtering**: Tier (`core`/`extended`) and difficulty filtering for `list` and `eval`
-- **Parallel Eval**: Run multiple tasks concurrently via `--parallel`
-- **Persistent Caches**: Optional `.sanity-cache/` mounted into containers to speed up builds
+- **Isolated Execution**: Each task runs in a dedicated Docker container
+- **Multi-Language Support**: Go, Rust, TypeScript, Kotlin, Dart, and Zig (26 tasks)
+- **13 Built-in Agents**: Gemini, Claude, OpenCode, Codex, and more
+- **Weighted Scoring**: Empirically-derived difficulty factors for fair comparison
+- **BLAKE3 Verification**: Cryptographic integrity checks for submissions
+- **Watch Mode**: Automatically re-run tests on file changes
+- **Hidden Tests**: Additional validation applied only during eval
+- **Parallel Eval**: Run multiple tasks concurrently with `--parallel`
+- **Persistent Caches**: Speed up builds with `.sanity-cache/` mounts
 
 ## Quick Start
 
@@ -25,275 +47,129 @@ A lightweight evaluation harness written in Go for coding agents that runs a div
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/lemon07r/sanityharness.git
 cd sanityharness
-
-# Install development tools (first-time setup)
-make tools
-
-# Build the CLI
-make build
+make tools    # Install dev tools (first-time only)
+make build    # Build the CLI
 ```
 
-### Usage
+### Global Flags
 
-#### List Available Tasks
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--config` | | Config file path (default: `./sanity.toml`) |
+| `--tasks-dir` | | External tasks directory |
+| `--verbose` | `-v` | Enable debug logging |
+
+## Usage
+
+### List Tasks
 
 ```bash
-./sanity list
-./sanity list --json
-./sanity list --language go
-./sanity list --tier core
-./sanity list --difficulty hard
+./sanity list                        # List all tasks
+./sanity list --json                 # JSON output
+./sanity list --language go          # Filter by language
+./sanity list --tier core            # Filter by tier
+./sanity list --difficulty hard      # Filter by difficulty
 ```
 
-#### Initialize a Workspace
+### Initialize Workspace
 
 ```bash
-# Create a workspace directory with task stub files
-./sanity init bank-account
-./sanity init bank-account -o ./my-workspace
+./sanity init go/bank-account        # Create workspace with stub files
+./sanity init go/bank-account -o ./my-dir
 ```
 
-#### Run a Task
+### Run a Task
 
 ```bash
-# Run tests once
-./sanity run bank-account
-
-# Run with watch mode (re-runs on file changes)
-./sanity run bank-account --watch
-
-# Specify custom workspace
-./sanity run bank-account -w ./my-implementation
-
-# Custom timeout and max attempts
-./sanity run bank-account --timeout 120 --max-attempts 5
+./sanity run go/bank-account         # Run tests once
+./sanity run go/bank-account --watch # Re-run on file changes
+./sanity run go/bank-account -w ./my-impl --timeout 60
 ```
 
-#### View Session Results
+### Evaluate an Agent
 
 ```bash
-# Show results from a previous run
-./sanity show sessions/bank-account-2026-01-15T143022
-
-# Output as JSON
-./sanity show sessions/bank-account-2026-01-15T143022 --json
+./sanity eval --agent gemini                          # Evaluate against core tasks
+./sanity eval --agent gemini --model gemini-3-pro     # Specify model
+./sanity eval --agent gemini --tier all --parallel 4  # All tasks, 4 concurrent
+./sanity eval --agent gemini --dry-run                # Preview without running
+./sanity eval --agent droid --reasoning high          # Set reasoning effort
+./sanity eval --agent gemini --use-mcp-tools          # Enable MCP tools
+./sanity eval --agent opencode --disable-mcp          # Disable MCP tools
 ```
 
-#### Evaluate an Agent
+### View Results
 
 ```bash
-# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, amp, codebuff, vibe
-./sanity eval --agent gemini
-./sanity eval --agent gemini --model gemini-3-pro
-./sanity eval --agent opencode --model google/gemini-3-flash
-./sanity eval --agent claude --lang go
-./sanity eval --agent gemini --tier all --parallel 4
-./sanity eval --agent gemini --difficulty hard,expert
-./sanity eval --agent gemini --tasks go/react,typescript/react
-./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
-./sanity eval --agent gemini --dry-run          # Show tasks without running
-./sanity eval --agent gemini --use-mcp-tools    # Enable MCP tools mode
-./sanity eval --agent opencode --disable-mcp    # Disable MCP tools (OpenCode only)
-./sanity eval --agent droid --reasoning high    # Set reasoning effort (droid only)
-./sanity eval --agent codebuff --model max      # Use codebuff max quality mode
+./sanity show sessions/go-bank-account-2026-01-15T143022-a1b2c3d4
+./sanity show sessions/go-bank-account-2026-01-15T143022-a1b2c3d4 --json
 ```
 
-#### Verify a Submission
+### Verify Submission
 
 ```bash
-# Verify integrity of an eval submission (no re-running, just hash checks)
 ./sanity verify ./eval-results/gemini-2026-01-07T120000
 ```
 
-#### Clean Up
+### Clean Up
 
 ```bash
-# Clean up workspace directories (interactive)
-./sanity clean
+./sanity clean                # Interactive cleanup
+./sanity clean --all --force  # Clean everything
+```
 
-# Clean specific types
-./sanity clean --workspaces       # Workspace directories only
-./sanity clean --sessions         # Session directories only
-./sanity clean --eval             # Eval results only
-./sanity clean --all              # Everything
+### Version
 
-# Skip confirmation
-./sanity clean --all --force
+```bash
+./sanity version              # Show version, commit, build date
 ```
 
 ### Task References
 
-Tasks can be referenced in two ways:
-
-- **Canonical ID**: `<language>/<slug>` (e.g., `go/bank-account`) - always unambiguous
-- **Bare slug**: `bank-account` - works only if the slug is unique across languages
-
-For tasks that exist in multiple languages (e.g., `react` exists in both Go and TypeScript), use the canonical form.
+Tasks can be referenced as:
+- **Canonical**: `<language>/<slug>` (e.g., `go/bank-account`) - always unambiguous
+- **Bare slug**: `bank-account` - works if unique across languages
 
 ## Available Tasks
 
-### Go (6 tasks)
+26 tasks across 6 languages with varying difficulty:
 
-| Task | Description | Difficulty | Tier | Hidden Tests |
-|------|-------------|------------|------|-------------|
-| `bank-account` | Concurrent bank account with mutex synchronization | Hard | core | No |
-| `dining-philosophers` | Classic concurrency problem solving | Hard | core | No |
-| `errgroup-limit` | Bounded concurrency group that stops on first error | Hard | core | Yes |
-| `parallel-letter-frequency` | Parallel text processing with goroutines | Hard | core | Yes |
-| `react` | Reactive spreadsheet cells with callbacks | Hard | extended | Yes |
-| `singleflight` | Deduplicate concurrent calls by key | Expert | extended | Yes |
+| Language | Tasks | Tiers | Difficulty |
+|----------|-------|-------|------------|
+| Go | 6 | 4 core, 2 extended | Hard - Expert |
+| Rust | 6 | 4 core, 2 extended | Hard - Expert |
+| TypeScript | 5 | 4 core, 1 extended | Hard |
+| Kotlin | 3 | 3 extended | Hard |
+| Dart | 3 | 3 extended | Hard |
+| Zig | 3 | 3 extended | Hard - Expert |
 
-### Rust (6 tasks)
-
-| Task | Description | Difficulty | Tier | Hidden Tests |
-|------|-------------|------------|------|-------------|
-| `circular-buffer` | Generic circular buffer with ownership | Hard | core | No |
-| `doubly-linked-list` | Unsafe Rust linked list implementation | Expert | extended | No |
-| `generational-arena` | Arena allocator with generational handles | Hard | extended | Yes |
-| `macros` | Declarative macro creation | Hard | core | Yes |
-| `parallel-letter-frequency` | Multi-threaded text processing | Hard | core | Yes |
-| `regex-lite` | Regex matching for `.`, `*` (full-string match) | Hard | core | Yes |
-
-### TypeScript (5 tasks)
-
-| Task | Description | Difficulty | Tier | Hidden Tests |
-|------|-------------|------------|------|-------------|
-| `forth` | Stack-based language interpreter | Hard | core | Yes |
-| `glob` | Glob pattern matching (`*`, `?`, escaping) | Hard | core | Yes |
-| `promise-pool` | Promise pool with bounded concurrency | Hard | core | Yes |
-| `csv-lite` | Parse CSV from a stream (quotes/escapes/CRLF) | Hard | core | Yes |
-| `react` | Reactive cell system with dependencies | Hard | extended | Yes |
-
-### Kotlin (3 tasks)
-
-| Task | Description | Difficulty | Tier | Hidden Tests |
-|------|-------------|------------|------|-------------|
-| `channel-multiplexer` | Combine multiple channels with priority support | Hard | extended | Yes |
-| `flow-processor` | Composable Kotlin Flow processor with operators | Hard | extended | Yes |
-| `lru-cache` | Fixed-capacity LRU cache with stable recency ordering | Hard | extended | Yes |
-
-### Dart (3 tasks)
-
-| Task | Description | Difficulty | Tier | Hidden Tests |
-|------|-------------|------------|------|-------------|
-| `isolate-pool` | Worker pool using Dart isolates | Hard | extended | Yes |
-| `reactive-cache` | Reactive cache with TTL and stream subscriptions | Hard | extended | Yes |
-| `future-pool` | Concurrency-limited async task runner preserving order | Hard | extended | Yes |
-
-### Zig (3 tasks)
-
-| Task | Description | Difficulty | Tier | Hidden Tests |
-|------|-------------|------------|------|-------------|
-| `arena-allocator` | Custom arena allocator with child arenas | Hard | extended | Yes |
-| `comptime-json` | Compile-time JSON schema parsing | Expert | extended | Yes |
-| `small-vector` | SmallVec with inline storage and heap growth | Hard | extended | Yes |
+See [docs/TASKS.md](docs/TASKS.md) for complete task listings and metadata.
 
 ## Configuration
 
-Create a `sanity.toml` file in your project root:
+Create `sanity.toml` in your project root:
 
 ```toml
 [harness]
 max_attempts = 10
 default_timeout = 60
 session_dir = "sessions"
-output_format = "all" # json, human, or all
 
 [docker]
 go_image = "ghcr.io/lemon07r/sanity-go:latest"
-rust_image = "ghcr.io/lemon07r/sanity-rust:latest"
-typescript_image = "ghcr.io/lemon07r/sanity-ts:latest"
-kotlin_image = "ghcr.io/lemon07r/sanity-kotlin:latest"
-dart_image = "ghcr.io/lemon07r/sanity-dart:latest"
-zig_image = "ghcr.io/lemon07r/sanity-zig:latest"
 auto_pull = true
 ```
 
-## Architecture
+Config files are searched in order:
+1. `./sanity.toml`
+2. `~/.sanity.toml`
+3. `~/.config/sanity/config.toml`
 
-```
-sanityharness/
-├── cmd/sanity/          # CLI entry point
-├── internal/
-│   ├── cli/             # Cobra commands (list, init, run, show, eval, verify, clean, version)
-│   ├── config/          # TOML configuration with defaults
-│   ├── errors/          # Language-specific error summarization
-│   ├── result/          # Session and attempt types, output formatting
-│   ├── runner/          # Docker execution, file watching
-│   └── task/            # Task loading from embedded/external sources
-├── tasks/               # Embedded task files (compiled into binary)
-│   ├── go/
-│   ├── rust/
-│   ├── typescript/
-│   ├── kotlin/
-│   ├── dart/
-│   └── zig/
-└── containers/          # Dockerfiles for language runtimes
-```
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
 
-### How It Works
-
-1. **Container Strategy**: Containers run `sleep infinity` and commands execute via `docker exec` for fast reuse
-2. **Workspace Mounting**: Your code is mounted at `/workspace` in the container
-3. **User Permissions**: Runs as your host UID:GID to avoid root-owned files
-4. **Cache Isolation + Persistence**: Language caches redirect to `/tmp` and are mounted from `.sanity-cache/` for faster repeated runs
-5. **Embedded Tasks**: Task files are compiled into the binary for zero-dependency distribution
-
-## Session Output
-
-Each run creates a session directory with:
-
-- `result.json` - Structured results with attempts, timing, and final code
-- `report.md` - Human-readable Markdown summary
-- `logs/attempt-N.log` - Raw output for each attempt
-- `workspace/` - Final code snapshot
-
-Example session structure:
-```
-sessions/
-└── go-bank-account-2026-01-15T143022-a1b2c3d4/
-    ├── result.json
-    ├── report.md
-    ├── logs/
-    │   ├── attempt-1.log
-    │   └── attempt-2.log
-    └── workspace/
-        ├── bank_account.go
-        └── go.mod
-```
-
-Session IDs include a random 8-character suffix (e.g., `-a1b2c3d4`) to prevent collisions.
-
-### Eval Output
-
-Eval runs create an output directory with:
-
-- `summary.json` - Complete results with weighted scores and breakdowns by language/tier/difficulty
-- `attestation.json` - BLAKE3 hashes for verification (task files, solutions, results)
-- `report.md` - Human-readable Markdown report with tables and status icons
-- `submission.json` - Compact format optimized for leaderboard submissions
-- `<lang>-<slug>/agent.log` - Agent output for debugging (preserved even if workspace is cleaned)
-
-The summary includes weighted scoring metrics that account for empirically-derived task difficulty. Task results include a `status` field (`pass`, `partial_pass`, `fail`, `integrity_violation`) for fine-grained analysis.
-
-**Scoring rules:**
-- **Clean pass**: 100% of task weight
-- **Partial pass** (agent timed out but tests passed): 75% of task weight
-- **Fail**: 0 points
-- **Integrity violation** (modified test files): -0.25 penalty
-
-**Task weights** (1.0-1.5) are based on difficulty factors calibrated from empirical agent performance:
-- Language rarity in training data (Dart, Kotlin coroutines > Go, TypeScript)
-- Esoteric language features (comptime, isolates, macros)
-- Novel algorithms vs well-known patterns
-- Edge case density
-
-## Agent Configuration
-
-SanityHarness supports 13 built-in agents. Custom agents can be configured in `sanity.toml`:
+## Agents
 
 ### Built-in Agents
 
@@ -309,101 +185,85 @@ SanityHarness supports 13 built-in agents. Custom agents can be configured in `s
 | `droid` | Factory Droid CLI |
 | `iflow` | iFlow CLI |
 | `qwen` | Qwen Code CLI |
-| `amp` | Sourcegraph Amp CLI (modes: `smart`, `rush`, `free`) |
-| `codebuff` | Codebuff CLI (modes: `max`, `lite`) |
+| `amp` | Sourcegraph Amp CLI |
+| `codebuff` | Codebuff CLI |
 | `vibe` | Mistral Vibe CLI |
 
-### Custom Agent Configuration
+### Custom Agents
 
 ```toml
-# Override a built-in agent
-[agents.gemini]
-command = "gemini"
-args = ["--yolo", "--model", "gemini-3-pro", "{prompt}"]
-
-# Add a custom agent
 [agents.my-agent]
 command = "/path/to/my-agent"
 args = ["--auto-approve", "{prompt}"]
-model_flag = "-m"              # Optional: flag for --model
-model_flag_position = "before" # "before" (default) or "after" args
-env = { API_KEY = "xxx" }      # Optional: environment variables
+model_flag = "-m"
+env = { API_KEY = "xxx" }
 ```
 
-### MCP Tools Control
+See [docs/CONFIGURATION.md#agent-configuration](docs/CONFIGURATION.md#agent-configuration) for full schema.
 
-For agents with MCP (Model Context Protocol) tools, you can control their behavior:
+## How It Works
 
-```bash
-# Encourage the agent to use MCP tools (adds prompt instructions)
-./sanity eval --agent gemini --use-mcp-tools
+1. **Container Strategy**: Containers run `sleep infinity`; commands execute via `docker exec` for fast reuse
+2. **Workspace Mounting**: Your code is mounted at `/workspace` in the container
+3. **User Permissions**: Runs as your host UID:GID to avoid root-owned files
+4. **Cache Persistence**: Language caches mount from `.sanity-cache/` for faster builds
+5. **Embedded Tasks**: Task files are compiled into the binary for zero-dependency distribution
 
-# Disable MCP tools entirely (OpenCode only)
-./sanity eval --agent opencode --disable-mcp
+## Output
+
+### Session Output
+
+Each `sanity run` creates:
+
+```
+sessions/<session-id>/
+├── result.json      # Structured results
+├── report.md        # Markdown summary
+├── logs/            # Per-attempt logs
+└── workspace/       # Final code
 ```
 
-The `--disable-mcp` flag injects `OPENCODE_CONFIG_CONTENT={"tools":{"*_*":false}}` to disable all MCP server tools. This is useful for benchmarking agents without external tool access.
+### Eval Output
 
-## Development
+Each `sanity eval` creates:
 
-### Makefile
-
-This project uses a production-ready Makefile for all build, test, and development tasks:
-
-```bash
-make help               # Show all available targets
-make build              # Build binary for current platform
-make test               # Run tests with race detection
-make lint               # Run golangci-lint
-make check              # Run all quality checks (fmt, vet, lint)
-make coverage           # Generate HTML coverage report
-make build-all          # Cross-compile for Linux/Darwin/Windows
-make ci                 # Full CI pipeline (deps, check, test, build)
-make pre-commit         # Fast pre-commit checks
+```
+eval-results/<agent>-<timestamp>/
+├── summary.json       # Complete results with weighted scores
+├── attestation.json   # BLAKE3 hashes for verification
+├── report.md          # Human-readable report
+├── submission.json    # Leaderboard format
+└── <task>/agent.log   # Agent output per task
 ```
 
-### First-Time Setup
+See [docs/SCORING.md](docs/SCORING.md) for scoring details and output schemas.
 
-```bash
-make tools              # Install goimports, golangci-lint, govulncheck
-make deps               # Download dependencies
+## Architecture
+
+```
+sanityharness/
+├── cmd/sanity/          # CLI entry point
+├── internal/
+│   ├── cli/             # Cobra commands
+│   ├── config/          # TOML configuration
+│   ├── errors/          # Error summarization
+│   ├── result/          # Session/attempt types
+│   ├── runner/          # Docker execution
+│   └── task/            # Task loading
+├── tasks/               # Embedded task files
+└── containers/          # Dockerfiles
 ```
 
-### Running from External Tasks Directory
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for architecture details.
 
-For development, you can use an external tasks directory:
+## Contributing
 
+Contributions are welcome! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
+
+Quick start:
 ```bash
-./sanity list --tasks-dir ./my-tasks
-./sanity run my-task --tasks-dir ./my-tasks
-```
-
-### Building Container Images
-
-```bash
-# Build all container images at once
-make docker-build
-
-# Or build individually
-docker build -f containers/Dockerfile-go -t ghcr.io/lemon07r/sanity-go:latest .
-docker build -f containers/Dockerfile-rust -t ghcr.io/lemon07r/sanity-rust:latest .
-docker build -f containers/Dockerfile-ts -t ghcr.io/lemon07r/sanity-ts:latest .
-docker build -f containers/Dockerfile-kotlin -t ghcr.io/lemon07r/sanity-kotlin:latest .
-docker build -f containers/Dockerfile-dart -t ghcr.io/lemon07r/sanity-dart:latest .
-docker build -f containers/Dockerfile-zig -t ghcr.io/lemon07r/sanity-zig:latest .
-```
-
-## Known Issues
-
-### Docker File Permissions
-
-SanityHarness runs containers as your host UID:GID and redirects language caches/build outputs to `/tmp` to avoid root-owned artifacts in workspaces.
-
-If you still have root-owned files from older runs, you can clean them up with:
-
-```bash
-# Use Docker to remove files created by containers
-docker run --rm -v $(pwd):/workspace alpine rm -rf /workspace/my-workspace
+make pre-commit  # Run before committing
+make test        # Run tests
 ```
 
 ## License
