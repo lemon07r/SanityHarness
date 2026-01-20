@@ -233,7 +233,9 @@ eval-results/<agent>-<timestamp>/
 ├── attestation.json   # BLAKE3 hashes for verification
 ├── report.md          # Human-readable report
 ├── submission.json    # Leaderboard format
-└── <task>/agent.log   # Agent output per task
+└── <task>/
+    ├── agent.log      # Agent output during task execution
+    └── validation.log # Test runner output from validation
 ```
 
 See [docs/SCORING.md](docs/SCORING.md) for scoring details and output schemas.

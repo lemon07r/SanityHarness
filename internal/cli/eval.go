@@ -42,24 +42,63 @@ var (
 	evalDisableMCP     bool
 )
 
+// Quota retry configuration
+const (
+	quotaMaxRetries  = 3
+	quotaRetryDelay1 = 10 * time.Second
+	quotaRetryDelay2 = 30 * time.Second
+	quotaRetryDelay3 = 60 * time.Second
+)
+
+// Patterns indicating recoverable rate limit errors (worth retrying)
+var recoverablePatterns = []string{
+	"429",
+	"rate limit",
+	"rate_limit",
+	"ratelimit",
+	"too many requests",
+	"overload",
+	"503",
+	"502",
+	"529",
+	"temporarily unavailable",
+	"try again later",
+	"service unavailable",
+}
+
+// Patterns indicating non-recoverable quota errors (skip retries)
+var nonRecoverablePatterns = []string{
+	"reset after",
+	"monthly",
+	"billing",
+	"authentication failed",
+	"unauthorized",
+	"forbidden",
+	"invalid api key",
+	"exhausted your capacity",
+	"exceeded your current quota",
+}
+
 // EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
-	Task          string            `json:"task"`
-	Language      string            `json:"language"`
-	Tier          string            `json:"tier,omitempty"`
-	Difficulty    string            `json:"difficulty,omitempty"`
-	Passed        bool              `json:"passed"`
-	AgentTimedOut bool              `json:"agent_timed_out,omitempty"`
-	Status        task.ResultStatus `json:"status,omitempty"`
-	Attempts      int               `json:"attempts"`
-	Duration      float64           `json:"duration_seconds"`
-	AgentTime     float64           `json:"agent_duration_seconds,omitempty"`
-	ValidateTime  float64           `json:"validation_duration_seconds,omitempty"`
-	PromptChars   int               `json:"prompt_chars,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	Weight        float64           `json:"weight,omitempty"`
-	WeightedScore float64           `json:"weighted_score,omitempty"`
-	WorkspaceDir  string            `json:"-"` // Not serialized, used for cleanup
+	Task           string            `json:"task"`
+	Language       string            `json:"language"`
+	Tier           string            `json:"tier,omitempty"`
+	Difficulty     string            `json:"difficulty,omitempty"`
+	Passed         bool              `json:"passed"`
+	AgentTimedOut  bool              `json:"agent_timed_out,omitempty"`
+	Status         task.ResultStatus `json:"status,omitempty"`
+	Attempts       int               `json:"attempts"`
+	Duration       float64           `json:"duration_seconds"`
+	AgentTime      float64           `json:"agent_duration_seconds,omitempty"`
+	ValidateTime   float64           `json:"validation_duration_seconds,omitempty"`
+	PromptChars    int               `json:"prompt_chars,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	Weight         float64           `json:"weight,omitempty"`
+	WeightedScore  float64           `json:"weighted_score,omitempty"`
+	QuotaRetries   int               `json:"quota_retries,omitempty"`
+	QuotaExhausted bool              `json:"quota_exhausted,omitempty"`
+	WorkspaceDir   string            `json:"-"` // Not serialized, used for cleanup
 }
 
 // EvalAggregate summarizes results for a group (language, tier, difficulty).
@@ -102,6 +141,8 @@ type EvalSummary struct {
 	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
 	UseMCPTools         bool                     `json:"use_mcp_tools,omitempty"`
 	DisableMCP          bool                     `json:"disable_mcp,omitempty"`
+	QuotaAffectedTasks  int                      `json:"quota_affected_tasks,omitempty"`
+	TotalQuotaRetries   int                      `json:"total_quota_retries,omitempty"`
 }
 
 var evalCmd = &cobra.Command{
@@ -514,9 +555,25 @@ Examples:
 			return m
 		}
 
+		// Aggregate quota statistics
+		var quotaAffectedTasks int
+		var totalQuotaRetries int
+		for _, r := range results {
+			if r.QuotaExhausted {
+				quotaAffectedTasks++
+			}
+			totalQuotaRetries += r.QuotaRetries
+		}
+
+		// Default model to "unknown" if not specified
+		model := evalModel
+		if model == "" {
+			model = "unknown"
+		}
+
 		summary := EvalSummary{
 			Agent:               evalAgent,
-			Model:               evalModel,
+			Model:               model,
 			Reasoning:           evalReasoning,
 			Timestamp:           timestamp,
 			Tier:                evalTier,
@@ -542,6 +599,8 @@ Examples:
 			ByDifficulty:        finalize(byDifficulty),
 			UseMCPTools:         evalUseMCPTools,
 			DisableMCP:          evalDisableMCP,
+			QuotaAffectedTasks:  quotaAffectedTasks,
+			TotalQuotaRetries:   totalQuotaRetries,
 		}
 
 		summaryPath := filepath.Join(evalOutputDir, "summary.json")
@@ -629,8 +688,6 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	if t.AgentTimeout > 0 {
 		agentTimeout = time.Duration(t.AgentTimeout) * time.Second
 	}
-	agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
-	defer cancel()
 
 	// Get agent configuration
 	agentCfg := cfg.GetAgent(agent)
@@ -640,47 +697,116 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		return result
 	}
 
-	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
+	agentLogPath := filepath.Join(workspaceDir, "agent.log")
 
-	cmd.Dir = workspaceDir
+	// Agent execution with quota retry loop
+	var quotaRetries int
+	var quotaExhausted bool
+	var totalAgentTime float64
 
-	// Use /dev/null for stdin to prevent TTY issues with agents that use Ink/React
-	devNull, err := os.Open(os.DevNull)
-	if err == nil {
-		cmd.Stdin = devNull
-		defer func() { _ = devNull.Close() }()
+	for attempt := 0; attempt <= quotaMaxRetries; attempt++ {
+		// On retry, wait and append to log with separator
+		if attempt > 0 {
+			delay := getRetryDelay(attempt)
+			logger.Info("quota error detected, retrying",
+				"task", t.ID(),
+				"attempt", attempt,
+				"delay", delay)
+			time.Sleep(delay)
+			quotaRetries = attempt
+		}
+
+		// Create context for this attempt
+		agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+
+		cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
+		cmd.Dir = workspaceDir
+
+		// Use /dev/null for stdin to prevent TTY issues with agents that use Ink/React
+		devNull, err := os.Open(os.DevNull)
+		if err == nil {
+			cmd.Stdin = devNull
+		}
+
+		cmd.Stdout = nil // Suppress output
+		cmd.Stderr = nil
+
+		// Open log file: create on first attempt, append on retry
+		var logFile *os.File
+		if attempt == 0 {
+			logFile, err = os.Create(agentLogPath)
+		} else {
+			logFile, err = os.OpenFile(agentLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				separator := fmt.Sprintf("\n\n=== RETRY %d (after %v delay) ===\n\n", attempt, getRetryDelay(attempt))
+				_, _ = logFile.WriteString(separator)
+			}
+		}
+		if err == nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+		}
+
+		// Run agent
+		agentStart := time.Now()
+		agentErr := cmd.Run()
+		attemptDuration := time.Since(agentStart).Seconds()
+		totalAgentTime += attemptDuration
+
+		// Sync and close log file BEFORE reading to ensure all buffers are flushed
+		if logFile != nil {
+			_ = logFile.Sync()
+			_ = logFile.Close()
+		}
+
+		// Close devNull
+		if devNull != nil {
+			_ = devNull.Close()
+		}
+
+		// Cancel this attempt's context
+		cancel()
+
+		// Check for timeout
+		if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
+			result.AgentTimedOut = true
+			logger.Debug("agent timed out", "timeout", agentTimeout)
+		}
+		if agentErr != nil {
+			logger.Debug("agent returned error", "error", agentErr)
+			// Don't fail yet - the tests will determine success
+		}
+
+		// Check for quota errors and decide whether to retry
+		hasError, isRecoverable := detectQuotaError(agentLogPath)
+		if !hasError {
+			// No quota error, we're done
+			break
+		}
+		if !isRecoverable {
+			// Non-recoverable quota error (e.g., daily limit)
+			quotaExhausted = true
+			logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
+			break
+		}
+		if attempt == quotaMaxRetries {
+			// Max retries reached
+			quotaExhausted = true
+			logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
+			break
+		}
+		// Otherwise, continue to next retry iteration
 	}
 
-	cmd.Stdout = nil // Suppress output
-	cmd.Stderr = nil
-
-	// Save agent output to log file
-	logFile, err := os.Create(filepath.Join(workspaceDir, "agent.log"))
-	if err == nil {
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-		defer func() { _ = logFile.Close() }()
-	}
-
-	// Run agent
-	agentStart := time.Now()
-	agentErr := cmd.Run()
-	result.AgentTime = time.Since(agentStart).Seconds()
-	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
-		result.AgentTimedOut = true
-		logger.Debug("agent timed out", "timeout", agentTimeout)
-	}
-	if agentErr != nil {
-		logger.Debug("agent returned error", "error", agentErr)
-		// Don't fail yet - the tests will determine success
-	}
+	result.AgentTime = totalAgentTime
+	result.QuotaRetries = quotaRetries
+	result.QuotaExhausted = quotaExhausted
 
 	// Preserve agent log in eval output directory for debugging
-	agentLogSrc := filepath.Join(workspaceDir, "agent.log")
-	if _, err := os.Stat(agentLogSrc); err == nil {
+	if _, err := os.Stat(agentLogPath); err == nil {
 		agentLogDst := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug), "agent.log")
 		if err := os.MkdirAll(filepath.Dir(agentLogDst), 0755); err == nil {
-			if srcData, err := os.ReadFile(agentLogSrc); err == nil {
+			if srcData, err := os.ReadFile(agentLogPath); err == nil {
 				_ = os.WriteFile(agentLogDst, srcData, 0644)
 			}
 		}
@@ -740,6 +866,16 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 
 	result.Passed = session.Passed()
 	result.Attempts = len(session.Attempts)
+
+	// Save validation output to validation.log
+	if len(session.Attempts) > 0 {
+		lastAttempt := session.Attempts[len(session.Attempts)-1]
+		taskOutputDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
+		validationLogPath := filepath.Join(taskOutputDir, "validation.log")
+		if err := os.MkdirAll(taskOutputDir, 0755); err == nil {
+			_ = os.WriteFile(validationLogPath, []byte(lastAttempt.RawOutput), 0644)
+		}
+	}
 
 	// Compute task weight and score
 	weight := task.ComputeWeight(t)
@@ -1329,6 +1465,49 @@ func writeReportVerification(sb *strings.Builder, attestation *EvalAttestation) 
 	fmt.Fprintf(sb, "- **Tasks Hash**: `%s`\n", attestation.Integrity.TasksHash)
 	fmt.Fprintf(sb, "- **Results Hash**: `%s`\n", attestation.Integrity.ResultsHash)
 	sb.WriteString("\n")
+}
+
+// detectQuotaError checks if agent log contains rate limit or quota errors.
+// Returns: (hasError, isRecoverable)
+// - hasError: true if any quota/rate limit pattern found
+// - isRecoverable: true if error is transient (worth retrying), false if permanent
+func detectQuotaError(logPath string) (bool, bool) {
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		return false, false
+	}
+
+	lower := strings.ToLower(string(content))
+
+	// Check for non-recoverable patterns first
+	for _, pattern := range nonRecoverablePatterns {
+		if strings.Contains(lower, pattern) {
+			return true, false // Error found, NOT recoverable
+		}
+	}
+
+	// Check for recoverable patterns
+	for _, pattern := range recoverablePatterns {
+		if strings.Contains(lower, pattern) {
+			return true, true // Error found, IS recoverable
+		}
+	}
+
+	return false, false
+}
+
+// getRetryDelay returns the delay for the given retry attempt (1-indexed)
+func getRetryDelay(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return quotaRetryDelay1
+	case 2:
+		return quotaRetryDelay2
+	case 3:
+		return quotaRetryDelay3
+	default:
+		return quotaRetryDelay3
+	}
 }
 
 func init() {
