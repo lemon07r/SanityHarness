@@ -39,6 +39,7 @@ var (
 	evalParallel       int
 	evalDryRun         bool
 	evalUseMCPTools    bool
+	evalDisableMCP     bool
 )
 
 // EvalResult holds the result of evaluating a single task.
@@ -100,6 +101,7 @@ type EvalSummary struct {
 	ByTier              map[string]EvalAggregate `json:"by_tier,omitempty"`
 	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
 	UseMCPTools         bool                     `json:"use_mcp_tools,omitempty"`
+	DisableMCP          bool                     `json:"disable_mcp,omitempty"`
 }
 
 var evalCmd = &cobra.Command{
@@ -539,6 +541,7 @@ Examples:
 			ByTier:              finalize(byTier),
 			ByDifficulty:        finalize(byDifficulty),
 			UseMCPTools:         evalUseMCPTools,
+			DisableMCP:          evalDisableMCP,
 		}
 
 		summaryPath := filepath.Join(evalOutputDir, "summary.json")
@@ -637,7 +640,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		return result
 	}
 
-	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning)
+	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
 
 	cmd.Dir = workspaceDir
 
@@ -852,7 +855,8 @@ func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir s
 
 // buildAgentCommand creates an exec.Cmd for the given agent configuration.
 // It handles prompt placeholder substitution, model flag positioning, reasoning flag, and environment variables.
-func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt, model, reasoning string) *exec.Cmd {
+// If disableMCP is true and the agent supports it, MCP tools will be disabled via environment variables.
+func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt, model, reasoning string, disableMCP bool, agentName string) *exec.Cmd {
 	var args []string
 
 	// Determine model flag position (default to "before")
@@ -925,16 +929,30 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	}
 
 	cmd := exec.CommandContext(ctx, agentCfg.Command, args...)
-
-	// Add environment variables if specified
-	if len(agentCfg.Env) > 0 {
-		cmd.Env = os.Environ()
-		for k, v := range agentCfg.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-	}
+	cmd.Env = buildAgentEnv(agentCfg.Env, disableMCP, agentName)
 
 	return cmd
+}
+
+// buildAgentEnv creates the environment variable slice for an agent command.
+// It merges the agent's configured env vars with any runtime injections (like MCP disable).
+func buildAgentEnv(agentEnv map[string]string, disableMCP bool, agentName string) []string {
+	if len(agentEnv) == 0 && !disableMCP {
+		return nil
+	}
+
+	env := os.Environ()
+	for k, v := range agentEnv {
+		env = append(env, k+"="+v)
+	}
+
+	// Inject MCP disable config for OpenCode
+	// MCP tools are registered as "servername_toolname", so "*_*" matches all MCP tools
+	if disableMCP && agentName == "opencode" {
+		env = append(env, `OPENCODE_CONFIG_CONTENT={"tools":{"*_*":false}}`)
+	}
+
+	return env
 }
 
 // EvalAttestation provides cryptographic verification of eval results.
@@ -1113,6 +1131,7 @@ type LeaderboardSubmission struct {
 
 	// Configuration
 	UseMCPTools bool `json:"use_mcp_tools,omitempty"`
+	DisableMCP  bool `json:"disable_mcp,omitempty"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -1155,6 +1174,7 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 
 	// Add configuration flags
 	submission.UseMCPTools = summary.UseMCPTools
+	submission.DisableMCP = summary.DisableMCP
 
 	// Convert language stats
 	for lang, agg := range summary.ByLanguage {
@@ -1200,6 +1220,9 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	}
 	if summary.UseMCPTools {
 		sb.WriteString("| MCP Tools Mode | Yes |\n")
+	}
+	if summary.DisableMCP {
+		sb.WriteString("| MCP Disabled | Yes |\n")
 	}
 	fmt.Fprintf(sb, "| Timestamp | %s |\n", summary.Timestamp)
 	fmt.Fprintf(sb, "| Pass Rate | **%.1f%%** (%d/%d) |\n", summary.PassRate, summary.Passed, summary.Total)
@@ -1322,4 +1345,5 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
 	evalCmd.Flags().BoolVar(&evalDryRun, "dry-run", false, "show what tasks would be run without executing")
 	evalCmd.Flags().BoolVar(&evalUseMCPTools, "use-mcp-tools", false, "inject MCP tool usage instructions into agent prompt")
+	evalCmd.Flags().BoolVar(&evalDisableMCP, "disable-mcp", false, "disable MCP tools for agents that support it (currently: opencode)")
 }
