@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -40,6 +42,7 @@ var (
 	evalDryRun         bool
 	evalUseMCPTools    bool
 	evalDisableMCP     bool
+	evalResume         string
 )
 
 // Quota retry configuration.
@@ -145,6 +148,24 @@ type EvalSummary struct {
 	TotalQuotaRetries   int                      `json:"total_quota_retries,omitempty"`
 }
 
+// RunConfig stores the original eval configuration for resume capability.
+type RunConfig struct {
+	Agent          string   `json:"agent"`
+	Model          string   `json:"model,omitempty"`
+	Reasoning      string   `json:"reasoning,omitempty"`
+	Tier           string   `json:"tier,omitempty"`
+	Difficulty     string   `json:"difficulty,omitempty"`
+	Lang           string   `json:"lang,omitempty"`
+	Tasks          string   `json:"tasks,omitempty"`
+	Timeout        int      `json:"timeout"`
+	Parallel       int      `json:"parallel"`
+	UseMCPTools    bool     `json:"use_mcp_tools,omitempty"`
+	DisableMCP     bool     `json:"disable_mcp,omitempty"`
+	KeepWorkspaces bool     `json:"keep_workspaces,omitempty"`
+	TaskList       []string `json:"task_list"`
+	CreatedAt      string   `json:"created_at"`
+}
+
 var evalCmd = &cobra.Command{
 	Use:   "eval",
 	Short: "Evaluate an agent against all tasks",
@@ -173,8 +194,37 @@ Examples:
   sanity eval --agent opencode --model google/gemini-2.5-flash
   sanity eval --agent claude --lang go
   sanity eval --agent my-custom-agent --tasks bank-account,react
-  sanity eval --agent gemini --dry-run`,
+  sanity eval --agent gemini --dry-run
+  sanity eval --resume ./eval-results/gemini-2026-01-19T192910`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Track if we're resuming a previous run.
+		var isResuming bool
+		var previousResults []EvalResult
+		var completedTasks map[string]bool
+		var runCfg *RunConfig
+
+		// Handle resume mode: load config and apply settings.
+		if evalResume != "" {
+			var err error
+			runCfg, err = loadRunConfig(evalResume)
+			if err != nil {
+				return fmt.Errorf("loading resume config: %w", err)
+			}
+			applyRunConfig(runCfg)
+			evalOutputDir = evalResume
+			isResuming = true
+
+			completedTasks, err = findCompletedTasks(evalOutputDir)
+			if err != nil {
+				return fmt.Errorf("finding completed tasks: %w", err)
+			}
+
+			previousResults, err = loadPreviousResults(evalOutputDir)
+			if err != nil {
+				return fmt.Errorf("loading previous results: %w", err)
+			}
+		}
+
 		// Dry-run mode doesn't require agent to be installed
 		if !evalDryRun {
 			if evalAgent == "" {
@@ -335,10 +385,62 @@ Examples:
 			return fmt.Errorf("creating output directory: %w", err)
 		}
 
+		// For resume mode: filter out completed tasks and clean incomplete dirs.
+		totalTaskCount := len(allTasks)
+		if isResuming {
+			// Build task map for ordering from run config.
+			taskMap := make(map[string]*task.Task)
+			for _, t := range allTasks {
+				taskMap[string(t.Language)+"/"+t.Slug] = t
+			}
+
+			// Restore original task order from run config.
+			var orderedTasks []*task.Task
+			for _, slug := range runCfg.TaskList {
+				if t, ok := taskMap[slug]; ok {
+					orderedTasks = append(orderedTasks, t)
+				}
+			}
+			allTasks = orderedTasks
+
+			// Clean up incomplete task directories.
+			if err := cleanIncompleteTaskDirs(evalOutputDir, completedTasks, allTasks); err != nil {
+				return fmt.Errorf("cleaning incomplete tasks: %w", err)
+			}
+
+			// Filter out completed tasks.
+			var remaining []*task.Task
+			for _, t := range allTasks {
+				taskSlug := string(t.Language) + "/" + t.Slug
+				if !completedTasks[taskSlug] {
+					remaining = append(remaining, t)
+				}
+			}
+			allTasks = remaining
+
+			if len(allTasks) == 0 {
+				fmt.Println("\n All tasks already completed. Nothing to resume.")
+				return nil
+			}
+		} else {
+			// Save run config for new runs (enables resume).
+			if err := saveRunConfig(evalOutputDir, allTasks); err != nil {
+				return fmt.Errorf("saving run config: %w", err)
+			}
+		}
+
+		// Set up interrupt handler for graceful shutdown.
+		interrupted := setupInterruptHandler()
+		var wasInterrupted bool
+
 		// Print header
 		fmt.Println()
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		fmt.Println(" SANITY HARNESS - Agent Evaluation")
+		if isResuming {
+			fmt.Println(" SANITY HARNESS - Agent Evaluation (RESUMING)")
+		} else {
+			fmt.Println(" SANITY HARNESS - Agent Evaluation")
+		}
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		fmt.Println()
 		fmt.Printf(" Agent:   %s\n", evalAgent)
@@ -354,7 +456,11 @@ Examples:
 		if evalParallel > 1 {
 			fmt.Printf(" Parallel: %d\n", evalParallel)
 		}
-		fmt.Printf(" Tasks:   %d\n", len(allTasks))
+		if isResuming {
+			fmt.Printf(" Tasks:   %d remaining of %d total\n", len(allTasks), totalTaskCount)
+		} else {
+			fmt.Printf(" Tasks:   %d\n", len(allTasks))
+		}
 		fmt.Printf(" Output:  %s\n", evalOutputDir)
 		fmt.Println()
 
@@ -369,6 +475,13 @@ Examples:
 
 		if parallel == 1 {
 			for i, t := range allTasks {
+				// Check for interrupt before starting next task.
+				if checkInterrupted(interrupted) {
+					wasInterrupted = true
+					fmt.Println("\n\033[33m⚠ Interrupt received. Saving partial results...\033[0m")
+					break
+				}
+
 				fmt.Println("─────────────────────────────────────────────────────────────")
 				fmt.Printf(" [%d/%d] %s\n", i+1, len(allTasks), t.ID())
 				fmt.Println("─────────────────────────────────────────────────────────────")
@@ -408,6 +521,7 @@ Examples:
 
 			jobs := make(chan job)
 			jobResults := make(chan jobResult)
+			stopSending := make(chan struct{})
 
 			var wg sync.WaitGroup
 			for range parallel {
@@ -421,9 +535,18 @@ Examples:
 				}()
 			}
 
+			// Producer goroutine: sends jobs, stops on interrupt.
 			go func() {
 				for i, t := range allTasks {
-					jobs <- job{idx: i, t: t}
+					select {
+					case <-stopSending:
+						// Interrupt received, stop sending new jobs.
+						close(jobs)
+						wg.Wait()
+						close(jobResults)
+						return
+					case jobs <- job{idx: i, t: t}:
+					}
 				}
 				close(jobs)
 				wg.Wait()
@@ -432,6 +555,7 @@ Examples:
 
 			collected := make([]EvalResult, len(allTasks))
 			seen := 0
+		collectLoop:
 			for jr := range jobResults {
 				collected[jr.idx] = jr.r
 				seen++
@@ -456,8 +580,55 @@ Examples:
 						logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
 					}
 				}
+
+				// Check for interrupt after each result.
+				if checkInterrupted(interrupted) {
+					wasInterrupted = true
+					fmt.Println("\n\033[33m⚠ Interrupt received. Waiting for in-flight tasks...\033[0m")
+					close(stopSending)
+					// Drain remaining results from in-flight tasks.
+					for jr := range jobResults {
+						collected[jr.idx] = jr.r
+						if jr.r.Passed {
+							passed++
+						} else {
+							failed++
+						}
+						if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
+							_ = os.RemoveAll(jr.r.WorkspaceDir)
+						}
+					}
+					break collectLoop
+				}
 			}
-			results = append(results, collected...)
+			// Only include results that were actually run.
+			for _, r := range collected {
+				if r.Task != "" {
+					results = append(results, r)
+				}
+			}
+		}
+
+		// If resuming, merge with previous results.
+		if isResuming && len(previousResults) > 0 {
+			// Build a set of task IDs from new results.
+			newResultTasks := make(map[string]bool)
+			for _, r := range results {
+				newResultTasks[r.Task] = true
+			}
+			// Prepend previous results that aren't in the new results.
+			var merged []EvalResult
+			for _, r := range previousResults {
+				if !newResultTasks[r.Task] {
+					merged = append(merged, r)
+					if r.Passed {
+						passed++
+					} else {
+						failed++
+					}
+				}
+			}
+			results = append(merged, results...)
 		}
 
 		// Calculate pass rate
@@ -649,6 +820,11 @@ Examples:
 		}
 
 		fmt.Println()
+
+		// If interrupted, print resume command.
+		if wasInterrupted {
+			printResumeCommand(evalOutputDir)
+		}
 
 		return nil
 	},
@@ -1554,6 +1730,160 @@ func getRetryDelay(attempt int) time.Duration {
 	}
 }
 
+// saveRunConfig saves the eval configuration for resume capability.
+func saveRunConfig(outputDir string, allTasks []*task.Task) error {
+	taskList := make([]string, len(allTasks))
+	for i, t := range allTasks {
+		taskList[i] = string(t.Language) + "/" + t.Slug
+	}
+
+	runCfg := RunConfig{
+		Agent:          evalAgent,
+		Model:          evalModel,
+		Reasoning:      evalReasoning,
+		Tier:           evalTier,
+		Difficulty:     evalDifficulty,
+		Lang:           evalLang,
+		Tasks:          evalTasks,
+		Timeout:        evalTimeout,
+		Parallel:       evalParallel,
+		UseMCPTools:    evalUseMCPTools,
+		DisableMCP:     evalDisableMCP,
+		KeepWorkspaces: evalKeepWorkspaces,
+		TaskList:       taskList,
+		CreatedAt:      time.Now().Format(time.RFC3339),
+	}
+
+	data, err := json.MarshalIndent(runCfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling run config: %w", err)
+	}
+
+	return os.WriteFile(filepath.Join(outputDir, "run-config.json"), data, 0o644)
+}
+
+// loadRunConfig loads the eval configuration from a resume directory.
+func loadRunConfig(resumeDir string) (*RunConfig, error) {
+	data, err := os.ReadFile(filepath.Join(resumeDir, "run-config.json"))
+	if err != nil {
+		return nil, fmt.Errorf("reading run config: %w", err)
+	}
+
+	var runCfg RunConfig
+	if err := json.Unmarshal(data, &runCfg); err != nil {
+		return nil, fmt.Errorf("parsing run config: %w", err)
+	}
+
+	return &runCfg, nil
+}
+
+// applyRunConfig applies the loaded run config to global eval variables.
+func applyRunConfig(runCfg *RunConfig) {
+	evalAgent = runCfg.Agent
+	evalModel = runCfg.Model
+	evalReasoning = runCfg.Reasoning
+	evalTier = runCfg.Tier
+	evalDifficulty = runCfg.Difficulty
+	evalLang = runCfg.Lang
+	evalTasks = runCfg.Tasks
+	evalTimeout = runCfg.Timeout
+	evalParallel = runCfg.Parallel
+	evalUseMCPTools = runCfg.UseMCPTools
+	evalDisableMCP = runCfg.DisableMCP
+	evalKeepWorkspaces = runCfg.KeepWorkspaces
+}
+
+// findCompletedTasks returns a set of task slugs that have validation.log files.
+func findCompletedTasks(outputDir string) (map[string]bool, error) {
+	completed := make(map[string]bool)
+
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading output directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Check if validation.log exists in this task directory.
+		validationLog := filepath.Join(outputDir, entry.Name(), "validation.log")
+		if _, err := os.Stat(validationLog); err == nil {
+			// Directory name format is "language-slug", convert to "language/slug".
+			name := entry.Name()
+			if idx := strings.Index(name, "-"); idx > 0 {
+				taskSlug := name[:idx] + "/" + name[idx+1:]
+				completed[taskSlug] = true
+			}
+		}
+	}
+
+	return completed, nil
+}
+
+// loadPreviousResults loads results from a previous eval run for merging.
+func loadPreviousResults(outputDir string) ([]EvalResult, error) {
+	summaryPath := filepath.Join(outputDir, "summary.json")
+	data, err := os.ReadFile(summaryPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No previous results.
+		}
+		return nil, fmt.Errorf("reading summary: %w", err)
+	}
+
+	var summary EvalSummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return nil, fmt.Errorf("parsing summary: %w", err)
+	}
+
+	return summary.Results, nil
+}
+
+// cleanIncompleteTaskDirs removes task directories that don't have validation.log.
+func cleanIncompleteTaskDirs(outputDir string, completed map[string]bool, allTasks []*task.Task) error {
+	for _, t := range allTasks {
+		taskSlug := string(t.Language) + "/" + t.Slug
+		if completed[taskSlug] {
+			continue
+		}
+
+		// Task is incomplete, remove its directory if it exists.
+		taskDir := filepath.Join(outputDir, string(t.Language)+"-"+t.Slug)
+		if _, err := os.Stat(taskDir); err == nil {
+			if err := os.RemoveAll(taskDir); err != nil {
+				return fmt.Errorf("removing incomplete task dir %s: %w", taskDir, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// setupInterruptHandler creates a channel that receives interrupt signals.
+func setupInterruptHandler() chan os.Signal {
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt, syscall.SIGTERM)
+	return interrupted
+}
+
+// checkInterrupted checks if an interrupt signal has been received (non-blocking).
+func checkInterrupted(interrupted chan os.Signal) bool {
+	select {
+	case <-interrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+// printResumeCommand prints the command to resume an interrupted eval.
+func printResumeCommand(outputDir string) {
+	fmt.Printf("\n\033[33m⚠ Evaluation interrupted. To resume, run:\033[0m\n")
+	fmt.Printf("  ./sanity eval --resume %s\n\n", outputDir)
+}
+
 func init() {
 	evalCmd.Flags().StringVar(&evalAgent, "agent", "", "agent to evaluate (see --help for list)")
 	evalCmd.Flags().StringVar(&evalModel, "model", "", "model to use (e.g., gemini-2.5-pro or google/gemini-2.5-flash)")
@@ -1569,4 +1899,5 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalDryRun, "dry-run", false, "show what tasks would be run without executing")
 	evalCmd.Flags().BoolVar(&evalUseMCPTools, "use-mcp-tools", false, "inject MCP tool usage instructions into agent prompt")
 	evalCmd.Flags().BoolVar(&evalDisableMCP, "disable-mcp", false, "disable MCP tools for agents that support it (currently: opencode)")
+	evalCmd.Flags().StringVar(&evalResume, "resume", "", "resume eval from existing output directory")
 }

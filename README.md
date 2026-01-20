@@ -98,6 +98,7 @@ make build    # Build the CLI
 ./sanity eval --agent droid --reasoning high          # Set reasoning effort
 ./sanity eval --agent gemini --use-mcp-tools          # Enable MCP tools
 ./sanity eval --agent opencode --disable-mcp          # Disable MCP tools
+./sanity eval --resume ./eval-results/gemini-...      # Resume interrupted eval
 ```
 
 ### View Results
@@ -233,10 +234,13 @@ eval-results/<agent>-<timestamp>/
 ├── attestation.json   # BLAKE3 hashes for verification
 ├── report.md          # Human-readable report
 ├── submission.json    # Leaderboard format
+├── run-config.json    # Config for resume capability
 └── <task>/
     ├── agent.log      # Agent output during task execution
     └── validation.log # Test runner output from validation
 ```
+
+**Resume interrupted evals:** If interrupted (CTRL+C), the harness saves partial results and prints a resume command. Use `./sanity eval --resume <dir>` to continue.
 
 See [docs/SCORING.md](docs/SCORING.md) for scoring details and output schemas.
 
