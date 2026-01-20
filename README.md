@@ -85,7 +85,7 @@ make build
 #### Evaluate an Agent
 
 ```bash
-# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, amp, codebuff
+# Built-in agents: gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, amp, codebuff, vibe
 ./sanity eval --agent gemini
 ./sanity eval --agent gemini --model gemini-3-pro
 ./sanity eval --agent opencode --model google/gemini-3-flash
@@ -96,6 +96,7 @@ make build
 ./sanity eval --agent gemini --keep-workspaces  # Keep workspaces for debugging
 ./sanity eval --agent gemini --dry-run          # Show tasks without running
 ./sanity eval --agent gemini --use-mcp-tools    # Enable MCP tools mode
+./sanity eval --agent opencode --disable-mcp    # Disable MCP tools (OpenCode only)
 ./sanity eval --agent droid --reasoning high    # Set reasoning effort (droid only)
 ./sanity eval --agent codebuff --model max      # Use codebuff max quality mode
 ```
@@ -292,7 +293,7 @@ The summary includes weighted scoring metrics that account for empirically-deriv
 
 ## Agent Configuration
 
-SanityHarness supports 12 built-in agents. Custom agents can be configured in `sanity.toml`:
+SanityHarness supports 13 built-in agents. Custom agents can be configured in `sanity.toml`:
 
 ### Built-in Agents
 
@@ -310,6 +311,7 @@ SanityHarness supports 12 built-in agents. Custom agents can be configured in `s
 | `qwen` | Qwen Code CLI |
 | `amp` | Sourcegraph Amp CLI (modes: `smart`, `rush`, `free`) |
 | `codebuff` | Codebuff CLI (modes: `max`, `lite`) |
+| `vibe` | Mistral Vibe CLI |
 
 ### Custom Agent Configuration
 
@@ -327,6 +329,20 @@ model_flag = "-m"              # Optional: flag for --model
 model_flag_position = "before" # "before" (default) or "after" args
 env = { API_KEY = "xxx" }      # Optional: environment variables
 ```
+
+### MCP Tools Control
+
+For agents with MCP (Model Context Protocol) tools, you can control their behavior:
+
+```bash
+# Encourage the agent to use MCP tools (adds prompt instructions)
+./sanity eval --agent gemini --use-mcp-tools
+
+# Disable MCP tools entirely (OpenCode only)
+./sanity eval --agent opencode --disable-mcp
+```
+
+The `--disable-mcp` flag injects `OPENCODE_CONFIG_CONTENT={"tools":{"*_*":false}}` to disable all MCP server tools. This is useful for benchmarking agents without external tool access.
 
 ## Development
 
