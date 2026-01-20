@@ -1291,6 +1291,183 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	return cmd
 }
 
+// getOpenCodeConfigPaths returns the possible paths for the OpenCode config file.
+// It checks XDG_CONFIG_HOME first, then falls back to ~/.config/opencode/.
+func getOpenCodeConfigPaths() []string {
+	var paths []string
+
+	// Check XDG_CONFIG_HOME first (follows XDG Base Directory spec)
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		paths = append(paths,
+			filepath.Join(xdgConfig, "opencode", "opencode.jsonc"),
+			filepath.Join(xdgConfig, "opencode", "opencode.json"),
+		)
+	}
+
+	// Fall back to ~/.config/opencode/
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		paths = append(paths,
+			filepath.Join(homeDir, ".config", "opencode", "opencode.jsonc"),
+			filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+		)
+	}
+
+	return paths
+}
+
+// readOpenCodeConfig reads and parses the OpenCode config file.
+// Returns nil if the config file doesn't exist or can't be parsed.
+func readOpenCodeConfig() map[string]any {
+	for _, configPath := range getOpenCodeConfigPaths() {
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			continue // File doesn't exist or can't be read
+		}
+
+		// Strip JSONC comments (// and /* */) for parsing
+		// This is a simple approach that handles most cases
+		data = stripJSONComments(data)
+
+		var config map[string]any
+		if err := json.Unmarshal(data, &config); err != nil {
+			continue // Invalid JSON, try next path
+		}
+
+		return config
+	}
+
+	return nil
+}
+
+// stripJSONComments removes single-line (//) and multi-line (/* */) comments from JSON.
+// This allows parsing JSONC (JSON with Comments) files.
+//
+//nolint:gocognit // State machine for parsing requires multiple conditionals
+func stripJSONComments(data []byte) []byte {
+	var result bytes.Buffer
+	inString := false
+	inSingleComment := false
+	inMultiComment := false
+
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+
+		// Handle string context (don't strip comments inside strings)
+		if !inSingleComment && !inMultiComment {
+			if c == '"' && (i == 0 || data[i-1] != '\\') {
+				inString = !inString
+			}
+		}
+
+		if inString {
+			result.WriteByte(c)
+			continue
+		}
+
+		// Handle single-line comments
+		if inSingleComment {
+			if c == '\n' {
+				inSingleComment = false
+				result.WriteByte(c) // Keep newline for line counting
+			}
+			continue
+		}
+
+		// Handle multi-line comments
+		if inMultiComment {
+			if c == '*' && i+1 < len(data) && data[i+1] == '/' {
+				inMultiComment = false
+				i++ // Skip the '/'
+			}
+			continue
+		}
+
+		// Check for comment start
+		if c == '/' && i+1 < len(data) {
+			if data[i+1] == '/' {
+				inSingleComment = true
+				i++ // Skip the second '/'
+				continue
+			}
+			if data[i+1] == '*' {
+				inMultiComment = true
+				i++ // Skip the '*'
+				continue
+			}
+		}
+
+		result.WriteByte(c)
+	}
+
+	return result.Bytes()
+}
+
+// deepMergeJSON performs a deep merge of two JSON-like maps.
+// Values from 'override' take precedence over 'base'.
+// Nested maps are merged recursively; other values are replaced.
+func deepMergeJSON(base, override map[string]any) map[string]any {
+	if base == nil {
+		base = make(map[string]any)
+	}
+
+	result := make(map[string]any)
+
+	// Copy base values
+	for k, v := range base {
+		result[k] = v
+	}
+
+	// Merge override values
+	for k, v := range override {
+		if baseVal, exists := result[k]; exists {
+			// If both are maps, merge recursively
+			baseMap, baseIsMap := baseVal.(map[string]any)
+			overrideMap, overrideIsMap := v.(map[string]any)
+			if baseIsMap && overrideIsMap {
+				result[k] = deepMergeJSON(baseMap, overrideMap)
+				continue
+			}
+		}
+		// Otherwise, override takes precedence
+		result[k] = v
+	}
+
+	return result
+}
+
+// buildOpenCodeMCPDisableConfig creates the OPENCODE_CONFIG_CONTENT value
+// by merging the user's existing config with the MCP disable settings.
+func buildOpenCodeMCPDisableConfig() string {
+	// The override config that disables all MCP tools
+	// MCP tools are registered as "servername_toolname", so "*_*" matches all
+	mcpDisable := map[string]any{
+		"tools": map[string]any{
+			"*_*": false,
+		},
+	}
+
+	// Try to read the user's existing config
+	userConfig := readOpenCodeConfig()
+
+	var finalConfig map[string]any
+	if userConfig != nil {
+		// Merge user config with MCP disable (MCP disable takes precedence)
+		finalConfig = deepMergeJSON(userConfig, mcpDisable)
+	} else {
+		// No user config found, just use MCP disable
+		finalConfig = mcpDisable
+	}
+
+	// Serialize to JSON
+	data, err := json.Marshal(finalConfig)
+	if err != nil {
+		// Fallback to minimal config if marshaling fails
+		return `{"tools":{"*_*":false}}`
+	}
+
+	return string(data)
+}
+
 // buildAgentEnv creates the environment variable slice for an agent command.
 // It merges the agent's configured env vars with any runtime injections (like MCP disable).
 func buildAgentEnv(agentEnv map[string]string, disableMCP bool, agentName string) []string {
@@ -1304,9 +1481,11 @@ func buildAgentEnv(agentEnv map[string]string, disableMCP bool, agentName string
 	}
 
 	// Inject MCP disable config for OpenCode
-	// MCP tools are registered as "servername_toolname", so "*_*" matches all MCP tools
+	// Merges user's existing config with the MCP disable settings to preserve
+	// custom models, plugins, and other configuration while disabling MCP tools
 	if disableMCP && agentName == "opencode" {
-		env = append(env, `OPENCODE_CONFIG_CONTENT={"tools":{"*_*":false}}`)
+		configContent := buildOpenCodeMCPDisableConfig()
+		env = append(env, "OPENCODE_CONFIG_CONTENT="+configContent)
 	}
 
 	return env
