@@ -186,8 +186,8 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
 | `droid` | Factory Droid CLI |
 | `iflow` | iFlow CLI |
 | `qwen` | Qwen Code CLI |
-| `amp` | Sourcegraph Amp CLI |
-| `codebuff` | Codebuff CLI |
+| `amp` | Sourcegraph Amp CLI (modes: `smart`, `rush`) |
+| `codebuff` | Codebuff CLI (modes: `max`, `lite`) |
 | `vibe` | Mistral Vibe CLI |
 
 ### Custom Agents
