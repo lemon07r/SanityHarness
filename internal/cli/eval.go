@@ -119,6 +119,8 @@ Built-in agents:
   iflow     - iFlow CLI
   qwen      - Qwen Code CLI
   amp       - Sourcegraph Amp CLI
+  codebuff  - Codebuff CLI
+  vibe      - Mistral Vibe CLI
 
 Custom agents can be configured in sanity.toml under [agents.<name>].
 

@@ -100,6 +100,12 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlag:         "--{value}",
 		ModelFlagPosition: "before",
 	},
+	"vibe": {
+		Command:           "vibe",
+		Args:              []string{"--prompt", "{prompt}"},
+		ModelFlag:         "",
+		ModelFlagPosition: "",
+	},
 }
 
 // Config holds all configuration for SanityHarness.
