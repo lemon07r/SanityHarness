@@ -42,7 +42,7 @@ var (
 	evalDisableMCP     bool
 )
 
-// Quota retry configuration
+// Quota retry configuration.
 const (
 	quotaMaxRetries  = 3
 	quotaRetryDelay1 = 10 * time.Second
@@ -50,7 +50,7 @@ const (
 	quotaRetryDelay3 = 60 * time.Second
 )
 
-// Patterns indicating recoverable rate limit errors (worth retrying)
+// Patterns indicating recoverable rate limit errors (worth retrying).
 var recoverablePatterns = []string{
 	"429",
 	"rate limit",
@@ -66,7 +66,7 @@ var recoverablePatterns = []string{
 	"service unavailable",
 }
 
-// Patterns indicating non-recoverable quota errors (skip retries)
+// Patterns indicating non-recoverable quota errors (skip retries).
 var nonRecoverablePatterns = []string{
 	"reset after",
 	"monthly",
@@ -699,118 +699,15 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 
 	agentLogPath := filepath.Join(workspaceDir, "agent.log")
 
-	// Agent execution with quota retry loop
-	var quotaRetries int
-	var quotaExhausted bool
-	var totalAgentTime float64
-
-	for attempt := 0; attempt <= quotaMaxRetries; attempt++ {
-		// On retry, wait and append to log with separator
-		if attempt > 0 {
-			delay := getRetryDelay(attempt)
-			logger.Info("quota error detected, retrying",
-				"task", t.ID(),
-				"attempt", attempt,
-				"delay", delay)
-			time.Sleep(delay)
-			quotaRetries = attempt
-		}
-
-		// Create context for this attempt
-		agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
-
-		cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
-		cmd.Dir = workspaceDir
-
-		// Use /dev/null for stdin to prevent TTY issues with agents that use Ink/React
-		devNull, err := os.Open(os.DevNull)
-		if err == nil {
-			cmd.Stdin = devNull
-		}
-
-		cmd.Stdout = nil // Suppress output
-		cmd.Stderr = nil
-
-		// Open log file: create on first attempt, append on retry
-		var logFile *os.File
-		if attempt == 0 {
-			logFile, err = os.Create(agentLogPath)
-		} else {
-			logFile, err = os.OpenFile(agentLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err == nil {
-				separator := fmt.Sprintf("\n\n=== RETRY %d (after %v delay) ===\n\n", attempt, getRetryDelay(attempt))
-				_, _ = logFile.WriteString(separator)
-			}
-		}
-		if err == nil {
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
-		}
-
-		// Run agent
-		agentStart := time.Now()
-		agentErr := cmd.Run()
-		attemptDuration := time.Since(agentStart).Seconds()
-		totalAgentTime += attemptDuration
-
-		// Sync and close log file BEFORE reading to ensure all buffers are flushed
-		if logFile != nil {
-			_ = logFile.Sync()
-			_ = logFile.Close()
-		}
-
-		// Close devNull
-		if devNull != nil {
-			_ = devNull.Close()
-		}
-
-		// Cancel this attempt's context
-		cancel()
-
-		// Check for timeout
-		if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
-			result.AgentTimedOut = true
-			logger.Debug("agent timed out", "timeout", agentTimeout)
-		}
-		if agentErr != nil {
-			logger.Debug("agent returned error", "error", agentErr)
-			// Don't fail yet - the tests will determine success
-		}
-
-		// Check for quota errors and decide whether to retry
-		hasError, isRecoverable := detectQuotaError(agentLogPath)
-		if !hasError {
-			// No quota error, we're done
-			break
-		}
-		if !isRecoverable {
-			// Non-recoverable quota error (e.g., daily limit)
-			quotaExhausted = true
-			logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
-			break
-		}
-		if attempt == quotaMaxRetries {
-			// Max retries reached
-			quotaExhausted = true
-			logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
-			break
-		}
-		// Otherwise, continue to next retry iteration
-	}
-
-	result.AgentTime = totalAgentTime
-	result.QuotaRetries = quotaRetries
-	result.QuotaExhausted = quotaExhausted
+	// Execute agent with quota retry support
+	agentResult := executeAgentWithRetries(t, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent)
+	result.AgentTime = agentResult.totalTime
+	result.AgentTimedOut = agentResult.timedOut
+	result.QuotaRetries = agentResult.quotaRetries
+	result.QuotaExhausted = agentResult.quotaExhausted
 
 	// Preserve agent log in eval output directory for debugging
-	if _, err := os.Stat(agentLogPath); err == nil {
-		agentLogDst := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug), "agent.log")
-		if err := os.MkdirAll(filepath.Dir(agentLogDst), 0755); err == nil {
-			if srcData, err := os.ReadFile(agentLogPath); err == nil {
-				_ = os.WriteFile(agentLogDst, srcData, 0644)
-			}
-		}
-	}
+	copyAgentLog(agentLogPath, outputDir, t)
 
 	// Ensure the agent didn't modify task-owned files.
 	modified, err := detectModifiedTaskFiles(loader, t, workspaceDir)
@@ -884,6 +781,154 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	result.WeightedScore = task.ScoreResult(result.Passed, result.AgentTimedOut, result.Error, weight)
 
 	return result
+}
+
+// agentExecutionResult holds the outcome of agent execution with retries.
+type agentExecutionResult struct {
+	totalTime      float64
+	timedOut       bool
+	quotaRetries   int
+	quotaExhausted bool
+}
+
+// executeAgentWithRetries runs the agent command with quota-aware retry logic.
+func executeAgentWithRetries(
+	t *task.Task,
+	agentCfg *config.AgentConfig,
+	prompt, model, workspaceDir, agentLogPath string,
+	agentTimeout time.Duration,
+	agent string,
+) agentExecutionResult {
+	var result agentExecutionResult
+
+	for attempt := 0; attempt <= quotaMaxRetries; attempt++ {
+		// On retry, wait and log
+		if attempt > 0 {
+			delay := getRetryDelay(attempt)
+			logger.Info("quota error detected, retrying",
+				"task", t.ID(),
+				"attempt", attempt,
+				"delay", delay)
+			time.Sleep(delay)
+			result.quotaRetries = attempt
+		}
+
+		// Run single attempt
+		attemptResult := runAgentAttempt(agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, attempt)
+		result.totalTime += attemptResult.duration
+		result.timedOut = attemptResult.timedOut
+
+		// Check for quota errors and decide whether to retry
+		hasError, isRecoverable := detectQuotaError(agentLogPath)
+		if !hasError {
+			break // No quota error, we're done
+		}
+		if !isRecoverable {
+			result.quotaExhausted = true
+			logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
+			break
+		}
+		if attempt == quotaMaxRetries {
+			result.quotaExhausted = true
+			logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
+			break
+		}
+	}
+
+	return result
+}
+
+// agentAttemptResult holds the outcome of a single agent attempt.
+type agentAttemptResult struct {
+	duration float64
+	timedOut bool
+}
+
+// runAgentAttempt executes a single agent command attempt.
+func runAgentAttempt(
+	agentCfg *config.AgentConfig,
+	prompt, model, workspaceDir, agentLogPath string,
+	agentTimeout time.Duration,
+	agent string,
+	attempt int,
+) agentAttemptResult {
+	var result agentAttemptResult
+
+	agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	defer cancel()
+
+	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
+	cmd.Dir = workspaceDir
+
+	// Use /dev/null for stdin to prevent TTY issues with agents that use Ink/React
+	devNull, err := os.Open(os.DevNull)
+	if err == nil {
+		cmd.Stdin = devNull
+		defer func() { _ = devNull.Close() }()
+	}
+
+	cmd.Stdout = nil // Suppress output
+	cmd.Stderr = nil
+
+	// Open log file: create on first attempt, append on retry
+	logFile := openAgentLogFile(agentLogPath, attempt)
+	if logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer func() {
+			_ = logFile.Sync()
+			_ = logFile.Close()
+		}()
+	}
+
+	// Run agent
+	agentStart := time.Now()
+	agentErr := cmd.Run()
+	result.duration = time.Since(agentStart).Seconds()
+
+	// Check for timeout
+	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
+		result.timedOut = true
+		logger.Debug("agent timed out", "timeout", agentTimeout)
+	}
+	if agentErr != nil {
+		logger.Debug("agent returned error", "error", agentErr)
+	}
+
+	return result
+}
+
+// openAgentLogFile opens the agent log file for writing.
+func openAgentLogFile(agentLogPath string, attempt int) *os.File {
+	var logFile *os.File
+	var err error
+
+	if attempt == 0 {
+		logFile, err = os.Create(agentLogPath)
+	} else {
+		logFile, err = os.OpenFile(agentLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			separator := fmt.Sprintf("\n\n=== RETRY %d (after %v delay) ===\n\n", attempt, getRetryDelay(attempt))
+			_, _ = logFile.WriteString(separator)
+		}
+	}
+
+	if err != nil {
+		return nil
+	}
+	return logFile
+}
+
+// copyAgentLog copies the agent log to the eval output directory.
+func copyAgentLog(agentLogPath, outputDir string, t *task.Task) {
+	if _, err := os.Stat(agentLogPath); err == nil {
+		agentLogDst := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug), "agent.log")
+		if err := os.MkdirAll(filepath.Dir(agentLogDst), 0755); err == nil {
+			if srcData, err := os.ReadFile(agentLogPath); err == nil {
+				_ = os.WriteFile(agentLogDst, srcData, 0644)
+			}
+		}
+	}
 }
 
 func buildAgentPrompt(t *task.Task, useMCPTools bool) string {
@@ -1468,9 +1513,8 @@ func writeReportVerification(sb *strings.Builder, attestation *EvalAttestation) 
 }
 
 // detectQuotaError checks if agent log contains rate limit or quota errors.
-// Returns: (hasError, isRecoverable)
-// - hasError: true if any quota/rate limit pattern found
-// - isRecoverable: true if error is transient (worth retrying), false if permanent
+// Returns (hasError, isRecoverable) where hasError indicates if any quota/rate
+// limit pattern was found, and isRecoverable indicates if the error is transient.
 func detectQuotaError(logPath string) (bool, bool) {
 	content, err := os.ReadFile(logPath)
 	if err != nil {
@@ -1496,7 +1540,7 @@ func detectQuotaError(logPath string) (bool, bool) {
 	return false, false
 }
 
-// getRetryDelay returns the delay for the given retry attempt (1-indexed)
+// getRetryDelay returns the delay for the given retry attempt (1-indexed).
 func getRetryDelay(attempt int) time.Duration {
 	switch attempt {
 	case 1:
