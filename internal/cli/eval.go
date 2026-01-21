@@ -51,6 +51,11 @@ const (
 	quotaRetryDelay1 = 10 * time.Second
 	quotaRetryDelay2 = 30 * time.Second
 	quotaRetryDelay3 = 60 * time.Second
+
+	// Stop eval early after this many consecutive quota-exhausted tasks.
+	// This allows resuming later when quota resets, rather than wasting time
+	// on tasks that will all fail immediately.
+	quotaExhaustedStopThreshold = 3
 )
 
 // Patterns indicating recoverable rate limit errors (worth retrying).
@@ -474,6 +479,7 @@ Examples:
 		}
 
 		if parallel == 1 {
+			consecutiveQuotaExhausted := 0
 			for i, t := range allTasks {
 				// Check for interrupt before starting next task.
 				if checkInterrupted(interrupted) {
@@ -492,12 +498,25 @@ Examples:
 				if result.Passed {
 					fmt.Printf(" ✓ PASSED (%.2fs)\n", result.Duration)
 					passed++
+					consecutiveQuotaExhausted = 0 // Reset counter on success
 				} else {
 					fmt.Printf(" ✗ FAILED (%.2fs)\n", result.Duration)
 					if result.Error != "" {
 						fmt.Printf("   Error: %s\n", result.Error)
 					}
 					failed++
+
+					// Track consecutive quota exhaustion
+					if result.QuotaExhausted {
+						consecutiveQuotaExhausted++
+						if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
+							wasInterrupted = true
+							fmt.Printf("\n\033[33m⚠ Quota exhausted for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
+							break
+						}
+					} else {
+						consecutiveQuotaExhausted = 0 // Reset on non-quota failure
+					}
 				}
 
 				// Clean up workspace unless --keep-workspaces is set
@@ -555,6 +574,7 @@ Examples:
 
 			collected := make([]EvalResult, len(allTasks))
 			seen := 0
+			consecutiveQuotaExhausted := 0
 		collectLoop:
 			for jr := range jobResults {
 				collected[jr.idx] = jr.r
@@ -571,8 +591,15 @@ Examples:
 
 				if jr.r.Passed {
 					passed++
+					consecutiveQuotaExhausted = 0 // Reset counter on success
 				} else {
 					failed++
+					// Track consecutive quota exhaustion
+					if jr.r.QuotaExhausted {
+						consecutiveQuotaExhausted++
+					} else {
+						consecutiveQuotaExhausted = 0 // Reset on non-quota failure
+					}
 				}
 
 				if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
@@ -582,9 +609,18 @@ Examples:
 				}
 
 				// Check for interrupt after each result.
-				if checkInterrupted(interrupted) {
+				shouldStop := checkInterrupted(interrupted)
+				stopReason := "Interrupt received"
+
+				// Also stop if we hit consecutive quota exhaustion threshold
+				if !shouldStop && consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
+					shouldStop = true
+					stopReason = fmt.Sprintf("Quota exhausted for %d consecutive tasks", consecutiveQuotaExhausted)
+				}
+
+				if shouldStop {
 					wasInterrupted = true
-					fmt.Println("\n\033[33m⚠ Interrupt received. Waiting for in-flight tasks...\033[0m")
+					fmt.Printf("\n\033[33m⚠ %s. Waiting for in-flight tasks...\033[0m\n", stopReason)
 					close(stopSending)
 					// Drain remaining results from in-flight tasks.
 					for jr := range jobResults {
