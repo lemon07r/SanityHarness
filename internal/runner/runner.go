@@ -265,6 +265,13 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (*result.Session, err
 	// Create error summarizer
 	summarizer := errsummary.NewSummarizer(string(t.Language))
 
+	// Touch stub files to invalidate build cache (prevents false positives from stale cached binaries).
+	// This is necessary because Cargo uses mtime-based fingerprinting - if an agent doesn't modify
+	// the stub file, Cargo may reuse a cached binary from a previous successful run.
+	if err := r.touchStubFiles(workspaceDir, t); err != nil {
+		r.logger.Warn("failed to touch stub files", "error", err)
+	}
+
 	// Run validation
 	if opts.WatchMode {
 		err = r.runWatchMode(ctx, t, containerID, session, summarizer, workspaceDir, opts)
@@ -447,6 +454,22 @@ func (r *Runner) copyTaskFiles(t *task.Task, destDir string, files []string) err
 
 		if err := os.WriteFile(destPath, content, 0644); err != nil {
 			return fmt.Errorf("writing file %s: %w", destFilename, err)
+		}
+	}
+	return nil
+}
+
+// touchStubFiles updates the modification time of all stub files in the workspace.
+// This invalidates Cargo's mtime-based build cache, forcing recompilation of user code.
+// Without this, if an agent crashes without modifying the stub, Cargo may reuse a
+// cached binary from a previous successful run, causing false positives.
+func (r *Runner) touchStubFiles(workspaceDir string, t *task.Task) error {
+	now := time.Now()
+	for _, filename := range t.Files.Stub {
+		destFilename := task.StripTxtExtension(filename)
+		path := filepath.Join(workspaceDir, destFilename)
+		if err := os.Chtimes(path, now, now); err != nil {
+			return fmt.Errorf("touching stub file %s: %w", destFilename, err)
 		}
 	}
 	return nil
