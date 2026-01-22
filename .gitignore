@@ -90,6 +90,10 @@ eval-results/
 /comptime-json/
 /small-vector/
 
+# Gradle build cache and output (in tasks)
+**/.gradle/
+**/build/
+
 # Pampax semantic search index
 .pampa/
 pampa.codemap.json
