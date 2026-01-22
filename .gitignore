@@ -90,9 +90,30 @@ eval-results/
 /comptime-json/
 /small-vector/
 
-# Gradle build cache and output (in tasks)
+# Gradle/Kotlin build cache and output
 **/.gradle/
 **/build/
+
+# Rust build output
+**/target/
+Cargo.lock
+
+# TypeScript/Node.js
+**/node_modules/
+**/dist/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Dart build output
+**/.dart_tool/
+**/.packages
+pubspec.lock
+
+# Zig build output
+**/zig-cache/
+**/zig-out/
+**/.zig-cache/
 
 # Pampax semantic search index
 .pampa/
