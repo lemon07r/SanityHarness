@@ -237,7 +237,10 @@ Examples:
 			}
 
 			// Load previous attestation to preserve hashes of tasks whose workspaces are gone.
-			prevAttestation, _ = loadPreviousAttestation(evalOutputDir)
+			prevAttestation, err = loadPreviousAttestation(evalOutputDir)
+			if err != nil {
+				logger.Warn("failed to load previous attestation", "error", err)
+			}
 		}
 
 		if timestamp == "" {
@@ -415,10 +418,20 @@ Examples:
 
 			// Restore original task order from run config.
 			var orderedTasks []*task.Task
+			var missingTasks []string
 			for _, slug := range runCfg.TaskList {
 				if t, ok := taskMap[slug]; ok {
 					orderedTasks = append(orderedTasks, t)
+				} else {
+					missingTasks = append(missingTasks, slug)
 				}
+			}
+			if len(missingTasks) > 0 {
+				logger.Warn("some tasks from original run not found in current build",
+					"missing", missingTasks,
+					"count", len(missingTasks))
+				fmt.Printf(" Warning: %d task(s) from original run not found: %v\n",
+					len(missingTasks), missingTasks)
 			}
 			allTasks = orderedTasks
 
@@ -846,9 +859,14 @@ Examples:
 		if prevAttestation != nil {
 			prevTasks = prevAttestation.Tasks
 		}
+		// Build set of tasks that were newly run in this session
+		newlyRunTasks := make(map[string]bool)
+		for _, t := range tasksToRun {
+			newlyRunTasks[t.ID()] = true
+		}
 		attestation, err := generateAttestation(
 			evalAgent, evalModel, timestamp, totalDuration,
-			results, evalOutputDir, loader, allTasks, prevTasks,
+			results, evalOutputDir, loader, allTasks, newlyRunTasks, prevTasks,
 		)
 		if err != nil {
 			logger.Warn("failed to generate attestation", "error", err)
@@ -1612,6 +1630,8 @@ func hashFiles(paths []string) (string, error) {
 }
 
 // generateAttestation creates an attestation for the eval run.
+// newlyRunTasks contains task IDs that were executed in this session.
+// previousTasks contains attestation data from a previous run (for resume).
 func generateAttestation(
 	agent, model, timestamp string,
 	totalDuration float64,
@@ -1619,6 +1639,7 @@ func generateAttestation(
 	outputDir string,
 	loader *task.Loader,
 	allTasks []*task.Task,
+	newlyRunTasks map[string]bool,
 	previousTasks map[string]AttestationTask,
 ) (*EvalAttestation, error) {
 	attestation := &EvalAttestation{
@@ -1651,17 +1672,12 @@ func generateAttestation(
 			continue
 		}
 
-		// If we have previous attestation data for this task, use it if the workspace is gone.
-		if prev, ok := previousTasks[r.Task]; ok {
-			// Check if solution hash exists in previous attestation.
-			if prev.SolutionHash != "" {
-				// Verify if the workspace still exists. If not, use the previous hash.
-				workspaceDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
-				if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
-					attestation.Tasks[r.Task] = prev
-					allTaskHashes = append(allTaskHashes, []byte(prev.TaskHash)...)
-					continue
-				}
+		// If this task was NOT newly run and we have previous attestation data, use it.
+		if !newlyRunTasks[r.Task] {
+			if prev, ok := previousTasks[r.Task]; ok && prev.SolutionHash != "" {
+				attestation.Tasks[r.Task] = prev
+				allTaskHashes = append(allTaskHashes, []byte(prev.TaskHash)...)
+				continue
 			}
 		}
 

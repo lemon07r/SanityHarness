@@ -106,6 +106,13 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlag:         "",
 		ModelFlagPosition: "",
 	},
+	"goose": {
+		Command:           "goose",
+		Args:              []string{"run", "--no-session", "-t", "{prompt}"},
+		ModelFlag:         "--model",
+		ModelFlagPosition: "after",
+		Env:               map[string]string{"GOOSE_MODE": "auto"},
+	},
 }
 
 // Config holds all configuration for SanityHarness.
