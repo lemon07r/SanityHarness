@@ -194,6 +194,7 @@ Built-in agents:
   codebuff  - Codebuff CLI
   vibe      - Mistral Vibe CLI
   goose     - Block Goose CLI
+  junie     - JetBrains Junie CLI
 
 Custom agents can be configured in sanity.toml under [agents.<name>].
 
