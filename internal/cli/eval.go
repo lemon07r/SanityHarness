@@ -28,8 +28,11 @@ import (
 )
 
 var (
-	evalAgent          string
-	evalModel          string
+	evalAgent string
+	evalModel string
+	// TODO(consistency): Consider passing evalReasoning explicitly through the call
+	// stack (runTaskWithAgent -> executeAgentWithRetries -> runAgentAttempt) to match
+	// the pattern used for model. Currently safe since it's read-only after CLI parse.
 	evalReasoning      string
 	evalTasks          string
 	evalLang           string

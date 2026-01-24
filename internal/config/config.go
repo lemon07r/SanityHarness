@@ -15,9 +15,9 @@ type AgentConfig struct {
 	Command               string            `toml:"command"`                 // Binary name or path
 	Args                  []string          `toml:"args"`                    // Args with {prompt} placeholder
 	ModelFlag             string            `toml:"model_flag"`              // e.g., "--model", "-m"
-	ModelFlagPosition     string            `toml:"model_flag_position"`     // "before" (default) or "after"
+	ModelFlagPosition     string            `toml:"model_flag_position"`     // "before" or "after" {prompt} in args (default: "before")
 	ReasoningFlag         string            `toml:"reasoning_flag"`          // e.g., "-r", "--reasoning-effort"
-	ReasoningFlagPosition string            `toml:"reasoning_flag_position"` // "before" (default) or "after"
+	ReasoningFlagPosition string            `toml:"reasoning_flag_position"` // "before" or "after" {prompt} in args (default: "before")
 	Env                   map[string]string `toml:"env"`                     // Environment variables
 }
 
