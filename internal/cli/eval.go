@@ -190,6 +190,7 @@ Built-in agents:
   amp       - Sourcegraph Amp CLI
   codebuff  - Codebuff CLI
   vibe      - Mistral Vibe CLI
+  goose     - Block Goose CLI
 
 Custom agents can be configured in sanity.toml under [agents.<name>].
 
@@ -207,8 +208,10 @@ Examples:
 		var previousResults []EvalResult
 		var completedTasks map[string]bool
 		var runCfg *RunConfig
+		var timestamp string
 
 		// Handle resume mode: load config and apply settings.
+		var prevAttestation *EvalAttestation
 		if evalResume != "" {
 			var err error
 			runCfg, err = loadRunConfig(evalResume)
@@ -224,10 +227,21 @@ Examples:
 				return fmt.Errorf("finding completed tasks: %w", err)
 			}
 
-			previousResults, err = loadPreviousResults(evalOutputDir)
+			prevSummary, err := loadPreviousSummary(evalOutputDir)
 			if err != nil {
 				return fmt.Errorf("loading previous results: %w", err)
 			}
+			if prevSummary != nil {
+				previousResults = prevSummary.Results
+				timestamp = prevSummary.Timestamp
+			}
+
+			// Load previous attestation to preserve hashes of tasks whose workspaces are gone.
+			prevAttestation, _ = loadPreviousAttestation(evalOutputDir)
+		}
+
+		if timestamp == "" {
+			timestamp = time.Now().Format("2006-01-02T150405")
 		}
 
 		// Dry-run mode doesn't require agent to be installed
@@ -382,7 +396,6 @@ Examples:
 		}
 
 		// Create output directory
-		timestamp := time.Now().Format("2006-01-02T150405")
 		if evalOutputDir == "" {
 			evalOutputDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", evalAgent, timestamp))
 		}
@@ -391,6 +404,7 @@ Examples:
 		}
 
 		// For resume mode: filter out completed tasks and clean incomplete dirs.
+		var tasksToRun []*task.Task
 		totalTaskCount := len(allTasks)
 		if isResuming {
 			// Build task map for ordering from run config.
@@ -414,20 +428,19 @@ Examples:
 			}
 
 			// Filter out completed tasks.
-			var remaining []*task.Task
 			for _, t := range allTasks {
 				taskSlug := string(t.Language) + "/" + t.Slug
 				if !completedTasks[taskSlug] {
-					remaining = append(remaining, t)
+					tasksToRun = append(tasksToRun, t)
 				}
 			}
-			allTasks = remaining
 
-			if len(allTasks) == 0 {
+			if len(tasksToRun) == 0 {
 				fmt.Println("\n All tasks already completed. Nothing to resume.")
 				return nil
 			}
 		} else {
+			tasksToRun = allTasks
 			// Save run config for new runs (enables resume).
 			if err := saveRunConfig(evalOutputDir, allTasks); err != nil {
 				return fmt.Errorf("saving run config: %w", err)
@@ -462,15 +475,15 @@ Examples:
 			fmt.Printf(" Parallel: %d\n", evalParallel)
 		}
 		if isResuming {
-			fmt.Printf(" Tasks:   %d remaining of %d total\n", len(allTasks), totalTaskCount)
+			fmt.Printf(" Tasks:   %d remaining of %d total\n", len(tasksToRun), totalTaskCount)
 		} else {
-			fmt.Printf(" Tasks:   %d\n", len(allTasks))
+			fmt.Printf(" Tasks:   %d\n", len(tasksToRun))
 		}
 		fmt.Printf(" Output:  %s\n", evalOutputDir)
 		fmt.Println()
 
 		// Run tasks
-		results := make([]EvalResult, 0, len(allTasks))
+		results := make([]EvalResult, 0, len(tasksToRun))
 		passed, failed := 0, 0
 
 		parallel := evalParallel
@@ -480,7 +493,7 @@ Examples:
 
 		if parallel == 1 {
 			consecutiveQuotaExhausted := 0
-			for i, t := range allTasks {
+			for i, t := range tasksToRun {
 				// Check for interrupt before starting next task.
 				if checkInterrupted(interrupted) {
 					wasInterrupted = true
@@ -489,7 +502,7 @@ Examples:
 				}
 
 				fmt.Println("─────────────────────────────────────────────────────────────")
-				fmt.Printf(" [%d/%d] %s\n", i+1, len(allTasks), t.ID())
+				fmt.Printf(" [%d/%d] %s\n", i+1, len(tasksToRun), t.ID())
 				fmt.Println("─────────────────────────────────────────────────────────────")
 
 				result := runTaskWithAgent(r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
@@ -556,7 +569,7 @@ Examples:
 
 			// Producer goroutine: sends jobs, stops on interrupt.
 			go func() {
-				for i, t := range allTasks {
+				for i, t := range tasksToRun {
 					select {
 					case <-stopSending:
 						// Interrupt received, stop sending new jobs.
@@ -572,7 +585,7 @@ Examples:
 				close(jobResults)
 			}()
 
-			collected := make([]EvalResult, len(allTasks))
+			collected := make([]EvalResult, len(tasksToRun))
 			seen := 0
 			consecutiveQuotaExhausted := 0
 		collectLoop:
@@ -584,7 +597,7 @@ Examples:
 				if jr.r.Passed {
 					status = "PASSED"
 				}
-				fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(allTasks), jr.r.Task, status, jr.r.Duration)
+				fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(tasksToRun), jr.r.Task, status, jr.r.Duration)
 				if !jr.r.Passed && jr.r.Error != "" {
 					fmt.Printf("   Error: %s\n", jr.r.Error)
 				}
@@ -666,6 +679,15 @@ Examples:
 			}
 			results = append(merged, results...)
 		}
+
+		// Sort results to match allTasks order
+		taskOrder := make(map[string]int)
+		for i, t := range allTasks {
+			taskOrder[t.ID()] = i
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return taskOrder[results[i].Task] < taskOrder[results[j].Task]
+		})
 
 		// Calculate pass rate
 		total := passed + failed
@@ -820,9 +842,13 @@ Examples:
 
 		// Generate attestation for verification
 		loader := task.NewLoader(tasks.FS, tasksDir)
+		var prevTasks map[string]AttestationTask
+		if prevAttestation != nil {
+			prevTasks = prevAttestation.Tasks
+		}
 		attestation, err := generateAttestation(
 			evalAgent, evalModel, timestamp, totalDuration,
-			results, evalOutputDir, loader, allTasks,
+			results, evalOutputDir, loader, allTasks, prevTasks,
 		)
 		if err != nil {
 			logger.Warn("failed to generate attestation", "error", err)
@@ -1593,6 +1619,7 @@ func generateAttestation(
 	outputDir string,
 	loader *task.Loader,
 	allTasks []*task.Task,
+	previousTasks map[string]AttestationTask,
 ) (*EvalAttestation, error) {
 	attestation := &EvalAttestation{
 		Version: "1",
@@ -1622,6 +1649,20 @@ func generateAttestation(
 		t := taskMap[r.Task]
 		if t == nil {
 			continue
+		}
+
+		// If we have previous attestation data for this task, use it if the workspace is gone.
+		if prev, ok := previousTasks[r.Task]; ok {
+			// Check if solution hash exists in previous attestation.
+			if prev.SolutionHash != "" {
+				// Verify if the workspace still exists. If not, use the previous hash.
+				workspaceDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
+				if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
+					attestation.Tasks[r.Task] = prev
+					allTaskHashes = append(allTaskHashes, []byte(prev.TaskHash)...)
+					continue
+				}
+			}
 		}
 
 		// Hash task files (stub + test + support)
@@ -2037,8 +2078,8 @@ func findCompletedTasks(outputDir string) (map[string]bool, error) {
 	return completed, nil
 }
 
-// loadPreviousResults loads results from a previous eval run for merging.
-func loadPreviousResults(outputDir string) ([]EvalResult, error) {
+// loadPreviousSummary loads results from a previous eval run for merging.
+func loadPreviousSummary(outputDir string) (*EvalSummary, error) {
 	summaryPath := filepath.Join(outputDir, "summary.json")
 	data, err := os.ReadFile(summaryPath)
 	if err != nil {
@@ -2053,7 +2094,26 @@ func loadPreviousResults(outputDir string) ([]EvalResult, error) {
 		return nil, fmt.Errorf("parsing summary: %w", err)
 	}
 
-	return summary.Results, nil
+	return &summary, nil
+}
+
+// loadPreviousAttestation loads attestation from a previous eval run.
+func loadPreviousAttestation(outputDir string) (*EvalAttestation, error) {
+	attestationPath := filepath.Join(outputDir, "attestation.json")
+	data, err := os.ReadFile(attestationPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No previous attestation.
+		}
+		return nil, fmt.Errorf("reading attestation: %w", err)
+	}
+
+	var attestation EvalAttestation
+	if err := json.Unmarshal(data, &attestation); err != nil {
+		return nil, fmt.Errorf("parsing attestation: %w", err)
+	}
+
+	return &attestation, nil
 }
 
 // cleanIncompleteTaskDirs removes task directories that don't have validation.log.
