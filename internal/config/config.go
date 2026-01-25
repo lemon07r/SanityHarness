@@ -30,10 +30,12 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition: "before",
 	},
 	"opencode": {
-		Command:           "opencode",
-		Args:              []string{"run", "{prompt}"},
-		ModelFlag:         "-m",
-		ModelFlagPosition: "after",
+		Command:               "opencode",
+		Args:                  []string{"run", "{prompt}"},
+		ModelFlag:             "-m",
+		ModelFlagPosition:     "after",
+		ReasoningFlag:         "--variant",
+		ReasoningFlagPosition: "after",
 	},
 	"claude": {
 		Command:           "claude",
