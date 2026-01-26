@@ -121,6 +121,14 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlag:         "--model",
 		ModelFlagPosition: "before",
 	},
+	"ccs": {
+		Command:               "ccs",
+		Args:                  []string{"-p", "--dangerously-skip-permissions", "{prompt}"},
+		ModelFlag:             "{value}",
+		ModelFlagPosition:     "before",
+		ReasoningFlag:         "--thinking",
+		ReasoningFlagPosition: "before",
+	},
 }
 
 // Config holds all configuration for SanityHarness.

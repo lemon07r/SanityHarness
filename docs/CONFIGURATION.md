@@ -64,7 +64,7 @@ auto_pull = true
 
 ## Agent Configuration
 
-SanityHarness supports 14 built-in coding agents and allows custom agent definitions.
+SanityHarness supports 15 built-in coding agents and allows custom agent definitions.
 
 ### Built-in Agents
 
@@ -84,6 +84,7 @@ SanityHarness supports 14 built-in coding agents and allows custom agent definit
 | `codebuff` | `codebuff` | `{prompt}` | `--{value}` (before) | - |
 | `vibe` | `vibe` | `--prompt {prompt}` | - | - |
 | `goose` | `goose` | `run --no-session -t {prompt}` | `--model` (after) | - |
+| `ccs` | `ccs` | `-p --dangerously-skip-permissions {prompt}` | `{value}` (before) | `--thinking` (before) |
 
 ### Custom Agent Schema
 

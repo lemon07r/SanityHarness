@@ -29,7 +29,7 @@ A lightweight evaluation harness for coding agents that runs high-signal, compac
 
 - **Isolated Execution**: Each task runs in a dedicated Docker container
 - **Multi-Language Support**: Go, Rust, TypeScript, Kotlin, Dart, and Zig (26 tasks)
-- **14 Built-in Agents**: Gemini, Claude, OpenCode, Codex, Goose, and more
+- **15 Built-in Agents**: Gemini, Claude, OpenCode, Codex, Goose, and more
 - **Weighted Scoring**: Empirically-derived difficulty factors for fair comparison
 - **BLAKE3 Verification**: Cryptographic integrity checks for submissions
 - **Watch Mode**: Automatically re-run tests on file changes
@@ -190,6 +190,7 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
 | `codebuff` | Codebuff CLI (modes: `max`, `lite`) |
 | `vibe` | Mistral Vibe CLI |
 | `goose` | Block Goose CLI |
+| `ccs` | Claude Code Switch (profiles: `agy`, `glm`, `kimi`, etc.) |
 
 ### Custom Agents
 
