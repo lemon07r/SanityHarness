@@ -123,7 +123,7 @@ var DefaultAgents = map[string]AgentConfig{
 	},
 	"ccs": {
 		Command:               "ccs",
-		Args:                  []string{"-p", "--dangerously-skip-permissions", "{prompt}"},
+		Args:                  []string{"--dangerously-skip-permissions", "{prompt}"},
 		ModelFlag:             "{value}",
 		ModelFlagPosition:     "before",
 		ReasoningFlag:         "--thinking",
