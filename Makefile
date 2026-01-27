@@ -141,7 +141,7 @@ verify: ## Verify dependencies
 fmt: ## Format code with goimports (handles import sorting)
 	@printf '$(INFO) Formatting code with goimports...\n'
 	@if command -v goimports >/dev/null 2>&1; then \
-		goimports -w -local $(MODULE_PATH) .; \
+		find . -name '*.go' -not -path './eval-results/*' -not -path './sessions/*' -not -path './bin/*' | xargs -r goimports -w -local $(MODULE_PATH); \
 	else \
 		printf '$(WARN) goimports not found, falling back to gofmt...\n'; \
 		go fmt ./...; \
