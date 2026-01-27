@@ -181,6 +181,7 @@ var evalCmd = &cobra.Command{
 
 Built-in agents:
   gemini    - Google Gemini CLI
+  kilocode  - Kilo Code CLI
   opencode  - OpenCode CLI
   claude    - Anthropic Claude Code
   codex     - OpenAI Codex CLI
@@ -200,6 +201,7 @@ Custom agents can be configured in sanity.toml under [agents.<name>].
 
 Examples:
   sanity eval --agent gemini
+  sanity eval --agent kilocode
   sanity eval --agent gemini --model gemini-2.5-pro
   sanity eval --agent opencode --model google/gemini-2.5-flash
   sanity eval --agent claude --lang go

@@ -177,6 +177,7 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
 | Agent | Description |
 |-------|-------------|
 | `gemini` | Google Gemini CLI |
+| `kilocode` | Kilo Code CLI |
 | `opencode` | OpenCode CLI |
 | `claude` | Anthropic Claude Code |
 | `codex` | OpenAI Codex CLI |

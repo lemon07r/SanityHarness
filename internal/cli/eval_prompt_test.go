@@ -315,22 +315,39 @@ func TestReadOpenCodeConfigWithTempFile(t *testing.T) {
 	}
 }
 
-// TestBuildAgentCommand tests the buildAgentCommand function with various
-// configurations covering model/reasoning flag positions and placeholder substitution.
-func TestBuildAgentCommand(t *testing.T) {
+type agentCommandTestCase struct {
+	name         string
+	agentCfg     *config.AgentConfig
+	prompt       string
+	model        string
+	reasoning    string
+	disableMCP   bool
+	agentName    string
+	expectedArgs []string
+}
+
+func runAgentCommandTestCases(t *testing.T, tests []agentCommandTestCase) {
+	t.Helper()
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			cmd := buildAgentCommand(ctx, tc.agentCfg, tc.prompt, tc.model, tc.reasoning, tc.disableMCP, tc.agentName)
+
+			// cmd.Args[0] is the command itself (e.g., "agent"), skip it for comparison
+			gotArgs := cmd.Args[1:]
+			if !reflect.DeepEqual(gotArgs, tc.expectedArgs) {
+				t.Errorf("args mismatch:\n  got:  %v\n  want: %v", gotArgs, tc.expectedArgs)
+			}
+		})
+	}
+}
+
+func TestBuildAgentCommand_NoFlags(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name         string
-		agentCfg     *config.AgentConfig
-		prompt       string
-		model        string
-		reasoning    string
-		disableMCP   bool
-		agentName    string
-		expectedArgs []string
-	}{
-		// === Core Code Paths: No Flags ===
+	runAgentCommandTestCases(t, []agentCommandTestCase{
 		{
 			name: "no_flags_empty_values",
 			agentCfg: &config.AgentConfig{
@@ -340,8 +357,13 @@ func TestBuildAgentCommand(t *testing.T) {
 			prompt:       "do the thing",
 			expectedArgs: []string{"run", "do the thing"},
 		},
+	})
+}
 
-		// === Core Code Paths: Model Flag ===
+func TestBuildAgentCommand_ModelFlag(t *testing.T) {
+	t.Parallel()
+
+	runAgentCommandTestCases(t, []agentCommandTestCase{
 		{
 			name: "model_before_standard",
 			agentCfg: &config.AgentConfig{
@@ -390,8 +412,13 @@ func TestBuildAgentCommand(t *testing.T) {
 			model:        "turbo",
 			expectedArgs: []string{"run", "do the thing", "--mode=turbo"},
 		},
+	})
+}
 
-		// === Core Code Paths: Reasoning Flag ===
+func TestBuildAgentCommand_ReasoningFlag(t *testing.T) {
+	t.Parallel()
+
+	runAgentCommandTestCases(t, []agentCommandTestCase{
 		{
 			name: "reasoning_before_standard",
 			agentCfg: &config.AgentConfig{
@@ -428,8 +455,13 @@ func TestBuildAgentCommand(t *testing.T) {
 			reasoning:    "high",
 			expectedArgs: []string{"-c model_reasoning_effort=high", "exec", "do the thing"},
 		},
+	})
+}
 
-		// === Core Code Paths: Both Model and Reasoning ===
+func TestBuildAgentCommand_ModelAndReasoningFlags(t *testing.T) {
+	t.Parallel()
+
+	runAgentCommandTestCases(t, []agentCommandTestCase{
 		{
 			name: "both_before",
 			agentCfg: &config.AgentConfig{
@@ -460,8 +492,13 @@ func TestBuildAgentCommand(t *testing.T) {
 			reasoning:    "high",
 			expectedArgs: []string{"exec", "do the thing", "-m", "gpt-4", "-r", "high"},
 		},
+	})
+}
 
-		// === Real-World Agent Patterns ===
+func TestBuildAgentCommand_RealWorldPatterns(t *testing.T) {
+	t.Parallel()
+
+	runAgentCommandTestCases(t, []agentCommandTestCase{
 		{
 			name: "pattern_gemini", // gemini --model X --yolo {prompt}
 			agentCfg: &config.AgentConfig{
@@ -473,6 +510,18 @@ func TestBuildAgentCommand(t *testing.T) {
 			prompt:       "implement the feature",
 			model:        "gemini-2.5-pro",
 			expectedArgs: []string{"--model", "gemini-2.5-pro", "--yolo", "implement the feature"},
+		},
+		{
+			name: "pattern_kilocode", // kilocode --model X --auto --yolo --mode code {prompt}
+			agentCfg: &config.AgentConfig{
+				Command:           "kilocode",
+				Args:              []string{"--auto", "--yolo", "--mode", "code", "{prompt}"},
+				ModelFlag:         "--model",
+				ModelFlagPosition: "before",
+			},
+			prompt:       "fix the bug",
+			model:        "kilocode-1",
+			expectedArgs: []string{"--model", "kilocode-1", "--auto", "--yolo", "--mode", "code", "fix the bug"},
 		},
 		{
 			name: "pattern_droid", // droid exec --skip-permissions-unsafe {prompt} -m X -r Y
@@ -516,8 +565,13 @@ func TestBuildAgentCommand(t *testing.T) {
 			model:        "max",
 			expectedArgs: []string{"--max", "write tests"},
 		},
+	})
+}
 
-		// === Edge Cases ===
+func TestBuildAgentCommand_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	runAgentCommandTestCases(t, []agentCommandTestCase{
 		{
 			name: "empty_position_defaults_to_before",
 			agentCfg: &config.AgentConfig{
@@ -564,19 +618,5 @@ func TestBuildAgentCommand(t *testing.T) {
 			model:        "gpt-4",
 			expectedArgs: []string{"-m", "gpt-4", "run", "do the thing", "--verbose", "--no-confirm"},
 		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := context.Background()
-			cmd := buildAgentCommand(ctx, tc.agentCfg, tc.prompt, tc.model, tc.reasoning, tc.disableMCP, tc.agentName)
-
-			// cmd.Args[0] is the command itself (e.g., "agent"), skip it for comparison
-			gotArgs := cmd.Args[1:]
-			if !reflect.DeepEqual(gotArgs, tc.expectedArgs) {
-				t.Errorf("args mismatch:\n  got:  %v\n  want: %v", gotArgs, tc.expectedArgs)
-			}
-		})
-	}
+	})
 }
