@@ -32,7 +32,7 @@ var DefaultAgents = map[string]AgentConfig{
 	"kilocode": {
 		Command:           "kilocode",
 		Args:              []string{"--auto", "--yolo", "--mode", "code", "{prompt}"},
-		ModelFlag:         "-P",
+		ModelFlag:         "-M",
 		ModelFlagPosition: "before",
 	},
 	"opencode": {

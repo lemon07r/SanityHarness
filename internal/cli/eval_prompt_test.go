@@ -512,16 +512,16 @@ func TestBuildAgentCommand_RealWorldPatterns(t *testing.T) {
 			expectedArgs: []string{"--model", "gemini-2.5-pro", "--yolo", "implement the feature"},
 		},
 		{
-			name: "pattern_kilocode", // kilocode -P X --auto --yolo --mode code {prompt}
+			name: "pattern_kilocode", // kilocode -M X --auto --yolo --mode code {prompt}
 			agentCfg: &config.AgentConfig{
 				Command:           "kilocode",
 				Args:              []string{"--auto", "--yolo", "--mode", "code", "{prompt}"},
-				ModelFlag:         "-P",
+				ModelFlag:         "-M",
 				ModelFlagPosition: "before",
 			},
 			prompt:       "fix the bug",
 			model:        "kilocode-1",
-			expectedArgs: []string{"-P", "kilocode-1", "--auto", "--yolo", "--mode", "code", "fix the bug"},
+			expectedArgs: []string{"-M", "kilocode-1", "--auto", "--yolo", "--mode", "code", "fix the bug"},
 		},
 		{
 			name: "pattern_droid", // droid exec --skip-permissions-unsafe {prompt} -m X -r Y

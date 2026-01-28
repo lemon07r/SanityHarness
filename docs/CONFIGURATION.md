@@ -71,7 +71,7 @@ SanityHarness supports 15 built-in coding agents and allows custom agent definit
 | Agent | Command | Args Pattern | Model Flag | Reasoning Flag |
 |-------|---------|--------------|------------|----------------|
 | `gemini` | `gemini` | `--yolo {prompt}` | `--model` (before) | - |
-| `kilocode` | `kilocode` | `--auto --yolo --mode code {prompt}` | `-P` (before) | - |
+| `kilocode` | `kilocode` | `--auto --yolo --mode code {prompt}` | `-M` (before) | - |
 | `opencode` | `opencode` | `run {prompt}` | `-m` (after) | - |
 | `claude` | `claude` | `-p --dangerously-skip-permissions {prompt}` | `--model` (before) | - |
 | `codex` | `codex` | `exec --dangerously-bypass-approvals-and-sandbox {prompt}` | `-m` (before) | `-c model_reasoning_effort={value}` (before) |
