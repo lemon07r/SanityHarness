@@ -1,6 +1,11 @@
-# Agent instructions (not for version control)
-AGENTS.md
+# Agent scratch files (not for version control)
 specifications.md
+
+# JetBrains Junie
+.junie/
+
+# Agent guidance (local only)
+AGENTS.md
 
 # Binaries (root level only, not cmd/sanity/)
 /sanity

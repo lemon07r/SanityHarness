@@ -20,7 +20,8 @@ auto_pull = true            # automatically pull images if missing
 # Agent Configuration
 # =============================================================================
 # Built-in agents with sensible defaults:
-#   gemini, opencode, claude, codex, kimi, crush, copilot, droid, iflow, qwen, junie
+#   gemini, kilocode, opencode, claude, codex, kimi, crush, copilot,
+#   droid, iflow, qwen, amp, codebuff, vibe, goose, junie, ccs, cline, pi
 #
 # You can override any built-in agent or add custom agents below.
 # Each agent config supports:

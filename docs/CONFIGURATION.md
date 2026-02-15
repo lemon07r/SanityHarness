@@ -64,15 +64,15 @@ auto_pull = true
 
 ## Agent Configuration
 
-SanityHarness supports 15 built-in coding agents and allows custom agent definitions.
+SanityHarness supports 19 built-in coding agents and allows custom agent definitions.
 
 ### Built-in Agents
 
 | Agent | Command | Args Pattern | Model Flag | Reasoning Flag |
 |-------|---------|--------------|------------|----------------|
 | `gemini` | `gemini` | `--yolo {prompt}` | `--model` (before) | - |
-| `kilocode` | `kilocode` | `--auto --yolo --mode code {prompt}` | `-M` (before) | - |
-| `opencode` | `opencode` | `run {prompt}` | `-m` (after) | - |
+| `kilocode` | `kilocode` | `run --auto {prompt}` | `-m` (before) | `--variant` (before) |
+| `opencode` | `opencode` | `run {prompt}` | `-m` (after) | `--variant` (after) |
 | `claude` | `claude` | `-p --dangerously-skip-permissions {prompt}` | `--model` (before) | - |
 | `codex` | `codex` | `exec --dangerously-bypass-approvals-and-sandbox {prompt}` | `-m` (before) | `-c model_reasoning_effort={value}` (before) |
 | `kimi` | `kimi` | `--yolo -c {prompt}` | `-m` (before) | - |
@@ -85,7 +85,10 @@ SanityHarness supports 15 built-in coding agents and allows custom agent definit
 | `codebuff` | `codebuff` | `{prompt}` | `--{value}` (before) | - |
 | `vibe` | `vibe` | `--prompt {prompt}` | - | - |
 | `goose` | `goose` | `run --no-session -t {prompt}` | `--model` (after) | - |
+| `junie` | `junie` | `--skip-update-check --task {prompt}` | `--model` (before) | - |
 | `ccs` | `ccs` | `-p --dangerously-skip-permissions {prompt}` | `{value}` (before) | `--thinking` (before) |
+| `cline` | `cline` | `task --yolo --thinking {prompt}` | `-m` (before) | - |
+| `pi` | `pi` | `--no-session -p {prompt}` | `-m` (before) | `--thinking` (before) |
 
 ### Custom Agent Schema
 

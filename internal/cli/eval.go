@@ -50,10 +50,13 @@ var (
 
 // Quota retry configuration.
 const (
-	quotaMaxRetries  = 3
-	quotaRetryDelay1 = 10 * time.Second
-	quotaRetryDelay2 = 30 * time.Second
-	quotaRetryDelay3 = 60 * time.Second
+	quotaMaxRetries  = 10
+	quotaRetryDelay1 = 30 * time.Second
+	quotaRetryDelay2 = 60 * time.Second
+	quotaRetryDelay3 = 120 * time.Second
+
+	// Threshold for considering an agent log as an infra failure (empty or near-empty).
+	infraFailureLogThreshold = 10 // bytes
 
 	// Stop eval early after this many consecutive quota-exhausted tasks.
 	// This allows resuming later when quota resets, rather than wasting time
@@ -196,6 +199,9 @@ Built-in agents:
   vibe      - Mistral Vibe CLI
   goose     - Block Goose CLI
   junie     - JetBrains Junie CLI
+  ccs       - Claude Code Switch
+  cline     - Cline CLI
+  pi        - Pi CLI
 
 Custom agents can be configured in sanity.toml under [agents.<name>].
 
@@ -918,12 +924,15 @@ Examples:
 
 func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) EvalResult {
 	start := time.Now()
+	weight := task.ComputeWeight(t)
 	result := EvalResult{
 		Task:       t.ID(),
 		Language:   string(t.Language),
 		Tier:       t.Tier,
 		Difficulty: t.Difficulty,
+		Weight:     weight.Base,
 	}
+	defer finalizeEvalResult(&result, start, weight)
 
 	loader := task.NewLoader(tasks.FS, tasksDir)
 
@@ -934,7 +943,6 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 
 	if err := r.InitWorkspaceForTask(t, workspaceDir); err != nil {
 		result.Error = fmt.Sprintf("init failed: %v", err)
-		result.Duration = time.Since(start).Seconds()
 		return result
 	}
 
@@ -955,7 +963,6 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	agentCfg := cfg.GetAgent(agent)
 	if agentCfg == nil {
 		result.Error = fmt.Sprintf("unknown agent: %s", agent)
-		result.Duration = time.Since(start).Seconds()
 		return result
 	}
 
@@ -975,20 +982,17 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	modified, err := detectModifiedTaskFiles(loader, t, workspaceDir)
 	if err != nil {
 		result.Error = fmt.Sprintf("integrity check failed: %v", err)
-		result.Duration = time.Since(start).Seconds()
 		return result
 	}
 	if len(modified) > 0 {
 		sort.Strings(modified)
 		result.Error = fmt.Sprintf("modified task files (disallowed): %s", strings.Join(modified, ", "))
-		result.Duration = time.Since(start).Seconds()
 		return result
 	}
 
 	// Add hidden tests (not shown to the agent) before validation.
 	if err := writeTaskFilesToWorkspace(loader, t, workspaceDir, t.HiddenTestFiles()); err != nil {
 		result.Error = fmt.Sprintf("writing hidden tests: %v", err)
-		result.Duration = time.Since(start).Seconds()
 		return result
 	}
 
@@ -1016,8 +1020,6 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	})
 	result.ValidateTime = time.Since(validateStart).Seconds()
 
-	result.Duration = time.Since(start).Seconds()
-
 	if err != nil {
 		result.Error = err.Error()
 		return result
@@ -1036,13 +1038,14 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		}
 	}
 
-	// Compute task weight and score
-	weight := task.ComputeWeight(t)
-	result.Weight = weight.Base
+	return result
+}
+
+// finalizeEvalResult ensures status/score fields are populated for all return paths.
+func finalizeEvalResult(result *EvalResult, start time.Time, weight task.Weight) {
+	result.Duration = time.Since(start).Seconds()
 	result.Status = task.DetermineStatus(result.Passed, result.AgentTimedOut, result.Error)
 	result.WeightedScore = task.ScoreResult(result.Passed, result.AgentTimedOut, result.Error, weight)
-
-	return result
 }
 
 // agentExecutionResult holds the outcome of agent execution with retries.
@@ -1054,6 +1057,8 @@ type agentExecutionResult struct {
 }
 
 // executeAgentWithRetries runs the agent command with quota-aware retry logic.
+// It also detects infra failures (empty/near-empty agent logs) and retries
+// with aggressive backoff.
 func executeAgentWithRetries(
 	t *task.Task,
 	agentCfg *config.AgentConfig,
@@ -1067,10 +1072,10 @@ func executeAgentWithRetries(
 		// On retry, wait and log
 		if attempt > 0 {
 			delay := getRetryDelay(attempt)
-			logger.Info("quota error detected, retrying",
+			logger.Info("retrying agent execution",
 				"task", t.ID(),
-				"attempt", attempt,
-				"delay", delay)
+ 			"attempt", attempt,
+ 			"delay", delay)
 			time.Sleep(delay)
 			result.quotaRetries = attempt
 		}
@@ -1083,7 +1088,17 @@ func executeAgentWithRetries(
 		// Check for quota errors and decide whether to retry
 		hasError, isRecoverable := detectQuotaError(agentLogPath)
 		if !hasError {
-			break // No quota error, we're done
+			// Check for infra failures (empty/near-empty logs).
+			if isInfraFailure(agentLogPath) {
+				if attempt == quotaMaxRetries {
+					result.quotaExhausted = true
+					logger.Debug("max retries reached for infra failure", "task", t.ID(), "retries", quotaMaxRetries)
+					break
+				}
+				logger.Debug("infra failure detected (empty agent log), will retry", "task", t.ID())
+				continue
+			}
+			break // No quota error and no infra failure, we're done
 		}
 		if !isRecoverable {
 			result.quotaExhausted = true
@@ -1092,7 +1107,7 @@ func executeAgentWithRetries(
 		}
 		if attempt == quotaMaxRetries {
 			result.quotaExhausted = true
-			logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
+			logger.Debug("max retries reached", "task", t.ID(), "retries", quotaMaxRetries)
 			break
 		}
 	}
@@ -2001,11 +2016,19 @@ func getRetryDelay(attempt int) time.Duration {
 		return quotaRetryDelay1
 	case 2:
 		return quotaRetryDelay2
-	case 3:
-		return quotaRetryDelay3
 	default:
 		return quotaRetryDelay3
 	}
+}
+
+// isInfraFailure checks if the agent log indicates an infrastructure failure
+// (empty or near-empty output suggesting the provider never responded).
+func isInfraFailure(logPath string) bool {
+	info, err := os.Stat(logPath)
+	if err != nil {
+		return true // No log file at all is an infra failure
+	}
+	return info.Size() < infraFailureLogThreshold
 }
 
 // saveRunConfig saves the eval configuration for resume capability.
