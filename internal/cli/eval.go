@@ -215,6 +215,15 @@ Examples:
   sanity eval --agent gemini --dry-run
   sanity eval --resume ./eval-results/gemini-2026-01-19T192910`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Apply config defaults for flags not explicitly set.
+		if !cmd.Flags().Changed("timeout") && evalTimeout == 0 {
+			if cfg != nil && cfg.Harness.DefaultTimeout > 0 {
+				evalTimeout = cfg.Harness.DefaultTimeout
+			} else {
+				evalTimeout = 120
+			}
+		}
+
 		// Track if we're resuming a previous run.
 		var isResuming bool
 		var previousResults []EvalResult
@@ -2212,7 +2221,7 @@ func init() {
 	evalCmd.Flags().StringVar(&evalLang, "lang", "", "filter by language (go, rust, typescript)")
 	evalCmd.Flags().StringVar(&evalTier, "tier", "core", "filter by tier (core, extended, all)")
 	evalCmd.Flags().StringVar(&evalDifficulty, "difficulty", "", "filter by difficulty (comma-separated)")
-	evalCmd.Flags().IntVar(&evalTimeout, "timeout", 120, "timeout per task in seconds")
+	evalCmd.Flags().IntVar(&evalTimeout, "timeout", 0, "timeout per task in seconds (default from config)")
 	evalCmd.Flags().IntVar(&evalParallel, "parallel", 1, "run up to N tasks in parallel")
 	evalCmd.Flags().StringVar(&evalOutputDir, "output", "", "output directory for results")
 	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
