@@ -1074,8 +1074,8 @@ func executeAgentWithRetries(
 			delay := getRetryDelay(attempt)
 			logger.Info("retrying agent execution",
 				"task", t.ID(),
- 			"attempt", attempt,
- 			"delay", delay)
+				"attempt", attempt,
+				"delay", delay)
 			time.Sleep(delay)
 			result.quotaRetries = attempt
 		}
