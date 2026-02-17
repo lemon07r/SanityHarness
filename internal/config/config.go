@@ -151,7 +151,7 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition:     "before",
 		ReasoningFlag:         "--thinking",
 		ReasoningFlagPosition: "before",
-		DefaultTimeout:        120, // pi buffers all stdout until tool calls complete; needs more time than streaming agents
+		DefaultTimeout:        240, // pi buffers all stdout until tool calls complete; needs more time than streaming agents
 	},
 }
 
