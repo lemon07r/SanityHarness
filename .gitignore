@@ -134,6 +134,10 @@ pampa.codemap.json
 
 # Log files
 *.log
+rerun-logs/
+
+# Shell scripts (local automation, not for version control)
+*.sh
 
 # Temporary files
 tmp/

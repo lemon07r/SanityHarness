@@ -3,7 +3,7 @@
 
 [harness]
 session_dir = "./sessions"
-default_timeout = 30        # seconds per task
+default_timeout = 120       # seconds per task
 max_attempts = 5            # maximum attempts in watch mode
 output_format = "all"       # json, human, or all
 

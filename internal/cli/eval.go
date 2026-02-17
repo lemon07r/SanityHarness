@@ -1022,10 +1022,13 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 		return result
 	}
 
-	// Run sanity harness to validate
+	// Run sanity harness to validate.
+	// Use at least 120s for validation regardless of the agent timeout,
+	// since some tasks (e.g. Dart isolate tests) need more time to run.
 	ctx := context.Background()
-	if timeout == 0 {
-		timeout = 120
+	validationTimeout := timeout
+	if validationTimeout < 120 {
+		validationTimeout = 120
 	}
 
 	validationCmd := []string(nil)
@@ -1040,7 +1043,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	session, err := r.Run(ctx, runner.RunOptions{
 		Task:              t, // Pass task directly to avoid slug collision
 		WorkspaceDir:      workspaceDir,
-		Timeout:           timeout,
+		Timeout:           validationTimeout,
 		MaxAttempts:       1,
 		ValidationCommand: validationCmd,
 	})
