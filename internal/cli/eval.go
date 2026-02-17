@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -479,6 +480,15 @@ Examples:
 			if err := saveRunConfig(evalOutputDir, allTasks); err != nil {
 				return fmt.Errorf("saving run config: %w", err)
 			}
+		}
+
+		// Protect the tasks/ directory from agent modification during eval.
+		// Agents run with CWD set to their workspace, but some agents have
+		// tools that can read/write arbitrary paths outside the workspace.
+		if restoreFn, err := protectTasksDir(); err != nil {
+			logger.Warn("failed to protect tasks directory", "error", err)
+		} else if restoreFn != nil {
+			defer restoreFn()
 		}
 
 		// Set up interrupt handler for graceful shutdown.
@@ -2234,6 +2244,62 @@ func checkInterrupted(interrupted chan os.Signal) bool {
 func printResumeCommand(outputDir string) {
 	fmt.Printf("\n\033[33m⚠ Evaluation interrupted. To resume, run:\033[0m\n")
 	fmt.Printf("  ./sanity eval --resume %s\n\n", outputDir)
+}
+
+// protectTasksDir makes the tasks/ directory read-only to prevent agents from
+// modifying embedded task source files during evaluation. Returns a restore
+// function that re-enables write permissions, or nil if protection was not needed.
+func protectTasksDir() (restore func(), err error) {
+	tasksPath := "tasks"
+	info, err := os.Stat(tasksPath)
+	if err != nil || !info.IsDir() {
+		return nil, nil // No on-disk tasks/ directory; nothing to protect
+	}
+
+	absTasksPath, err := filepath.Abs(tasksPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving tasks path: %w", err)
+	}
+
+	// Collect original permissions so we can restore them exactly.
+	type entry struct {
+		path string
+		mode fs.FileMode
+	}
+	var origPerms []entry
+
+	err = filepath.WalkDir(absTasksPath, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		origPerms = append(origPerms, entry{path: path, mode: info.Mode()})
+
+		// Remove write bits for user, group, and other.
+		newMode := info.Mode() &^ 0222
+		if newMode != info.Mode() {
+			return os.Chmod(path, newMode)
+		}
+		return nil
+	})
+	if err != nil {
+		// Best-effort: try to restore anything we already changed.
+		for _, e := range origPerms {
+			_ = os.Chmod(e.path, e.mode)
+		}
+		return nil, fmt.Errorf("protecting tasks directory: %w", err)
+	}
+
+	restore = func() {
+		// Restore in reverse order so directories are restored after their contents.
+		for i := len(origPerms) - 1; i >= 0; i-- {
+			_ = os.Chmod(origPerms[i].path, origPerms[i].mode)
+		}
+	}
+	return restore, nil
 }
 
 func init() {
