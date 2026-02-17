@@ -48,3 +48,26 @@ auto_pull = true            # automatically pull images if missing
 # [agents.special-agent]
 # command = "special"
 # args = ["run", "{prompt}", "--verbose", "--no-confirm"]
+
+# Azure-hosted Claude agent
+[agents.azure-claude]
+command = "claude"
+args = ["--print", "{prompt}"]
+model_flag = "--model"
+model_flag_position = "before"
+env = { ANTHROPIC_API_URL = "https://api.anthropic.com/v1", CLAUDE_USE_VERTEX = "false" }
+
+# Cliproxy Kimi agent (Kimi K2.5 model)
+[agents.cliproxy-kimi]
+command = "cliproxy-kimi"
+args = ["--print", "{prompt}"]
+model_flag = "--model"
+model_flag_position = "before"
+
+# Cliproxy Kimi K2.5 variant (explicit kimi-k2.5 model)
+[agents.cliproxy-kimi-k2-5]
+command = "cliproxy-kimi"
+args = ["--print", "{prompt}"]
+model_flag = "--model"
+model_flag_position = "before"
+env = { CLIPROXY_MODEL = "kimi-k2.5" }

@@ -19,6 +19,7 @@ type AgentConfig struct {
 	ReasoningFlag         string            `toml:"reasoning_flag"`          // e.g., "-r", "--reasoning-effort"
 	ReasoningFlagPosition string            `toml:"reasoning_flag_position"` // "before" or "after" {prompt} in args (default: "before")
 	Env                   map[string]string `toml:"env"`                     // Environment variables
+	DefaultTimeout        int               `toml:"default_timeout"`         // Per-agent minimum timeout in seconds (overrides harness default if larger)
 }
 
 // DefaultAgents provides built-in configurations for popular coding agents.
@@ -150,6 +151,7 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition:     "before",
 		ReasoningFlag:         "--thinking",
 		ReasoningFlagPosition: "before",
+		DefaultTimeout:        120, // pi buffers all stdout until tool calls complete; needs more time than streaming agents
 	},
 }
 

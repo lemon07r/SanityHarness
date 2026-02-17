@@ -959,20 +959,27 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	prompt := buildAgentPrompt(t, evalUseMCPTools)
 	result.PromptChars = utf8.RuneCountInString(prompt)
 
-	agentTimeout := time.Duration(timeout) * time.Second
-	if agentTimeout <= 0 {
-		agentTimeout = 120 * time.Second
-	}
-	// Use task-specific timeout if set
-	if t.AgentTimeout > 0 {
-		agentTimeout = time.Duration(t.AgentTimeout) * time.Second
-	}
-
 	// Get agent configuration
 	agentCfg := cfg.GetAgent(agent)
 	if agentCfg == nil {
 		result.Error = fmt.Sprintf("unknown agent: %s", agent)
 		return result
+	}
+
+	agentTimeout := time.Duration(timeout) * time.Second
+	if agentTimeout <= 0 {
+		agentTimeout = 120 * time.Second
+	}
+	// Apply per-agent default timeout as a floor (for agents with buffered output)
+	if agentCfg.DefaultTimeout > 0 {
+		agentMin := time.Duration(agentCfg.DefaultTimeout) * time.Second
+		if agentTimeout < agentMin {
+			agentTimeout = agentMin
+		}
+	}
+	// Use task-specific timeout if set
+	if t.AgentTimeout > 0 {
+		agentTimeout = time.Duration(t.AgentTimeout) * time.Second
 	}
 
 	agentLogPath := filepath.Join(workspaceDir, "agent.log")
@@ -2032,12 +2039,28 @@ func getRetryDelay(attempt int) time.Duration {
 
 // isInfraFailure checks if the agent log indicates an infrastructure failure
 // (empty or near-empty output suggesting the provider never responded).
+// It strips retry separator lines and whitespace to avoid false negatives
+// when the log contains only retry markers but no actual agent output.
 func isInfraFailure(logPath string) bool {
-	info, err := os.Stat(logPath)
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return true // No log file at all is an infra failure
 	}
-	return info.Size() < infraFailureLogThreshold
+
+	// Strip retry separator lines (e.g., "=== RETRY 1 (after 30s delay) ===")
+	// and whitespace to check if there's any real agent output.
+	var meaningful []byte
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		if bytes.HasPrefix(trimmed, []byte("=== RETRY ")) && bytes.HasSuffix(trimmed, []byte("===")) {
+			continue
+		}
+		meaningful = append(meaningful, trimmed...)
+	}
+	return len(meaningful) < infraFailureLogThreshold
 }
 
 // saveRunConfig saves the eval configuration for resume capability.
