@@ -620,3 +620,110 @@ func TestBuildAgentCommand_EdgeCases(t *testing.T) {
 		},
 	})
 }
+
+func TestBuildSandboxArgs(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	args := buildSandboxArgs(workspaceDir, nil)
+
+	// Verify required arguments are present.
+	assertContainsArg := func(flag, value string) {
+		t.Helper()
+		for i, arg := range args {
+			if arg == flag && i+1 < len(args) && args[i+1] == value {
+				return
+			}
+		}
+		t.Errorf("expected sandbox args to contain %s %s", flag, value)
+	}
+
+	assertContainsFlag := func(flag string) {
+		t.Helper()
+		for _, arg := range args {
+			if arg == flag {
+				return
+			}
+		}
+		t.Errorf("expected sandbox args to contain %s", flag)
+	}
+
+	// Workspace must be writable (--bind, not --ro-bind).
+	assertContainsArg("--bind", workspaceDir)
+
+	// Must have --chdir to workspace.
+	assertContainsArg("--chdir", workspaceDir)
+
+	// Must have namespace isolation with network sharing.
+	assertContainsFlag("--unshare-all")
+	assertContainsFlag("--share-net")
+	assertContainsFlag("--die-with-parent")
+
+	// Must have /dev and /proc.
+	assertContainsArg("--dev", "/dev")
+	assertContainsArg("--proc", "/proc")
+
+	// $HOME must be read-only (--ro-bind).
+	homeDir, _ := os.UserHomeDir()
+	assertContainsArg("--ro-bind", homeDir)
+
+	// Workspace must NOT appear as --ro-bind (it should be --bind for write access).
+	for i, arg := range args {
+		if arg == "--ro-bind" && i+1 < len(args) && args[i+1] == workspaceDir {
+			t.Error("workspace should not be mounted read-only")
+		}
+	}
+}
+
+func TestWrapCommandWithSandbox(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	ctx := context.Background()
+
+	agentCfg := &config.AgentConfig{
+		Command: "echo",
+		Args:    []string{"{prompt}"},
+	}
+
+	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, "test")
+	cmd.Dir = workspaceDir
+
+	wrapped := wrapCommandWithSandbox(ctx, cmd, nil)
+
+	// The wrapped command should use bwrap.
+	if !strings.HasSuffix(wrapped.Path, "bwrap") {
+		// Skip if bwrap is not installed (CI environments).
+		if wrapped.Path == "" {
+			t.Skip("bwrap not available")
+		}
+		t.Errorf("expected wrapped command to use bwrap, got %s", wrapped.Path)
+	}
+
+	// Args[0] should be "bwrap".
+	if wrapped.Args[0] != "bwrap" {
+		t.Errorf("expected Args[0] = bwrap, got %s", wrapped.Args[0])
+	}
+
+	// The original agent command path should appear after "--".
+	foundSeparator := false
+	for i, arg := range wrapped.Args {
+		if arg == "--" {
+			foundSeparator = true
+			if i+1 < len(wrapped.Args) {
+				if wrapped.Args[i+1] != cmd.Path {
+					t.Errorf("expected agent path %s after --, got %s", cmd.Path, wrapped.Args[i+1])
+				}
+			}
+			break
+		}
+	}
+	if !foundSeparator {
+		t.Error("expected -- separator in bwrap args")
+	}
+
+	// Environment should be preserved.
+	if !reflect.DeepEqual(wrapped.Env, cmd.Env) {
+		t.Error("expected environment to be preserved in wrapped command")
+	}
+}

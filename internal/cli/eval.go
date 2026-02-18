@@ -46,6 +46,8 @@ var (
 	evalDryRun         bool
 	evalUseMCPTools    bool
 	evalDisableMCP     bool
+	evalNoSandbox      bool
+	evalSandboxActive  bool
 	evalResume         string
 )
 
@@ -156,6 +158,7 @@ type EvalSummary struct {
 	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
 	UseMCPTools         bool                     `json:"use_mcp_tools,omitempty"`
 	DisableMCP          bool                     `json:"disable_mcp,omitempty"`
+	Sandbox             bool                     `json:"sandbox,omitempty"`
 	QuotaAffectedTasks  int                      `json:"quota_affected_tasks,omitempty"`
 	TotalQuotaRetries   int                      `json:"total_quota_retries,omitempty"`
 }
@@ -173,6 +176,7 @@ type RunConfig struct {
 	Parallel       int      `json:"parallel"`
 	UseMCPTools    bool     `json:"use_mcp_tools,omitempty"`
 	DisableMCP     bool     `json:"disable_mcp,omitempty"`
+	NoSandbox      bool     `json:"no_sandbox,omitempty"`
 	KeepWorkspaces bool     `json:"keep_workspaces,omitempty"`
 	TaskList       []string `json:"task_list"`
 	CreatedAt      string   `json:"created_at"`
@@ -482,6 +486,9 @@ Examples:
 			}
 		}
 
+		// Detect sandbox availability.
+		evalSandboxActive = initSandbox()
+
 		// Protect the tasks/ directory from agent modification during eval.
 		// Agents run with CWD set to their workspace, but some agents have
 		// tools that can read/write arbitrary paths outside the workspace.
@@ -517,6 +524,9 @@ Examples:
 		}
 		if evalParallel > 1 {
 			fmt.Printf(" Parallel: %d\n", evalParallel)
+		}
+		if evalSandboxActive {
+			fmt.Println(" Sandbox: enabled (bwrap)")
 		}
 		if isResuming {
 			fmt.Printf(" Tasks:   %d remaining of %d total\n", len(tasksToRun), totalTaskCount)
@@ -872,6 +882,7 @@ Examples:
 			ByDifficulty:        finalize(byDifficulty),
 			UseMCPTools:         evalUseMCPTools,
 			DisableMCP:          evalDisableMCP,
+			Sandbox:             evalSandboxActive,
 			QuotaAffectedTasks:  quotaAffectedTasks,
 			TotalQuotaRetries:   totalQuotaRetries,
 		}
@@ -1187,6 +1198,15 @@ func runAgentAttempt(
 		}()
 	}
 
+	// Wrap in bubblewrap sandbox if enabled.
+	if evalSandboxActive {
+		var extraDirs []string
+		if cfg != nil {
+			extraDirs = cfg.Sandbox.WritableDirs
+		}
+		cmd = wrapCommandWithSandbox(agentCtx, cmd, extraDirs)
+	}
+
 	// Run agent
 	agentStart := time.Now()
 	agentErr := cmd.Run()
@@ -1419,6 +1439,94 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	cmd.Env = buildAgentEnv(agentCfg.Env, disableMCP, agentName)
 
 	return cmd
+}
+
+// wrapCommandWithSandbox wraps an exec.Cmd in a bubblewrap sandbox.
+// The sandbox restricts filesystem access so the agent can only write to the
+// workspace directory and /tmp. The rest of the filesystem (including $HOME)
+// is mounted read-only. Network access is preserved for LLM API calls.
+func wrapCommandWithSandbox(ctx context.Context, cmd *exec.Cmd, extraWritableDirs []string) *exec.Cmd {
+	bwrapArgs := buildSandboxArgs(cmd.Dir, extraWritableDirs)
+	bwrapArgs = append(bwrapArgs, "--", cmd.Path)
+	bwrapArgs = append(bwrapArgs, cmd.Args[1:]...)
+
+	wrapped := exec.CommandContext(ctx, "bwrap", bwrapArgs...)
+	wrapped.Env = cmd.Env
+	wrapped.Stdin = cmd.Stdin
+	wrapped.Stdout = cmd.Stdout
+	wrapped.Stderr = cmd.Stderr
+
+	return wrapped
+}
+
+// buildSandboxArgs constructs the bubblewrap arguments for filesystem isolation.
+func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string {
+	homeDir, _ := os.UserHomeDir()
+
+	var args []string
+
+	// Mount system directories read-only.
+	for _, dir := range []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/run"} {
+		if _, err := os.Stat(dir); err == nil {
+			args = append(args, "--ro-bind", dir, dir)
+		}
+	}
+
+	// Mount $HOME read-only so agents can access their own configs and binaries.
+	args = append(args, "--ro-bind", homeDir, homeDir)
+
+	// Allow agents to write to their own data/config/cache directories under $HOME.
+	// These bind mounts override the read-only $HOME mount above. Agents need write
+	// access to persist session data, logs, auth tokens, and caches during execution
+	// (e.g. droid→~/.factory, goose→~/.local/state, claude→~/.claude).
+	writableDirs := []string{
+		// XDG standard directories.
+		".cache", ".config", ".local",
+		// Agent-specific directories.
+		".amp", ".ccs", ".claude", ".cline", ".codex", ".copilot", ".crush",
+		".factory", ".gemini", ".iflow", ".kilocode", ".kimi", ".opencode",
+		".pi", ".qwen", ".vibe",
+	}
+
+	// Merge user-configured writable dirs from [sandbox] config.
+	seen := make(map[string]bool, len(writableDirs))
+	for _, d := range writableDirs {
+		seen[d] = true
+	}
+	for _, d := range extraWritableDirs {
+		if !seen[d] {
+			seen[d] = true
+			writableDirs = append(writableDirs, d)
+		}
+	}
+
+	for _, dir := range writableDirs {
+		absDir := filepath.Join(homeDir, dir)
+		if _, err := os.Stat(absDir); err == nil {
+			args = append(args, "--bind", absDir, absDir)
+		}
+	}
+
+	// Workspace is the only persistent writable directory outside $HOME.
+	args = append(args, "--bind", workspaceDir, workspaceDir)
+
+	// /tmp for temporary files.
+	args = append(args, "--tmpfs", "/tmp")
+
+	// Required virtual filesystems.
+	args = append(args, "--dev", "/dev")
+	args = append(args, "--proc", "/proc")
+
+	// Namespace isolation: new mount/pid/user/ipc/uts namespaces, but keep network.
+	args = append(args, "--unshare-all", "--share-net")
+
+	// Kill agent if harness dies.
+	args = append(args, "--die-with-parent")
+
+	// Set working directory to workspace.
+	args = append(args, "--chdir", workspaceDir)
+
+	return args
 }
 
 // getOpenCodeConfigPaths returns the possible paths for the OpenCode config file.
@@ -1811,6 +1919,7 @@ type LeaderboardSubmission struct {
 	// Configuration
 	UseMCPTools bool `json:"use_mcp_tools,omitempty"`
 	DisableMCP  bool `json:"disable_mcp,omitempty"`
+	Sandbox     bool `json:"sandbox,omitempty"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -1854,6 +1963,7 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 	// Add configuration flags
 	submission.UseMCPTools = summary.UseMCPTools
 	submission.DisableMCP = summary.DisableMCP
+	submission.Sandbox = summary.Sandbox
 
 	// Convert language stats
 	for lang, agg := range summary.ByLanguage {
@@ -1902,6 +2012,9 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	}
 	if summary.DisableMCP {
 		sb.WriteString("| MCP Disabled | Yes |\n")
+	}
+	if summary.Sandbox {
+		sb.WriteString("| Sandbox | Yes |\n")
 	}
 	fmt.Fprintf(sb, "| Timestamp | %s |\n", summary.Timestamp)
 	fmt.Fprintf(sb, "| Pass Rate | **%.1f%%** (%d/%d) |\n", summary.PassRate, summary.Passed, summary.Total)
@@ -2095,6 +2208,7 @@ func saveRunConfig(outputDir string, allTasks []*task.Task) error {
 		Parallel:       evalParallel,
 		UseMCPTools:    evalUseMCPTools,
 		DisableMCP:     evalDisableMCP,
+		NoSandbox:      evalNoSandbox,
 		KeepWorkspaces: evalKeepWorkspaces,
 		TaskList:       taskList,
 		CreatedAt:      time.Now().Format(time.RFC3339),
@@ -2136,6 +2250,7 @@ func applyRunConfig(runCfg *RunConfig) {
 	evalParallel = runCfg.Parallel
 	evalUseMCPTools = runCfg.UseMCPTools
 	evalDisableMCP = runCfg.DisableMCP
+	evalNoSandbox = runCfg.NoSandbox
 	evalKeepWorkspaces = runCfg.KeepWorkspaces
 }
 
@@ -2249,6 +2364,22 @@ func printResumeCommand(outputDir string) {
 	fmt.Printf("  ./sanity eval --resume %s\n\n", outputDir)
 }
 
+// initSandbox checks if bubblewrap sandboxing should be enabled.
+// Returns true if sandbox is active (bwrap found and not disabled).
+func initSandbox() bool {
+	if evalNoSandbox {
+		logger.Info("sandbox disabled via --no-sandbox")
+		return false
+	}
+
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		logger.Warn("bubblewrap (bwrap) not found, running agents without sandbox")
+		return false
+	}
+
+	return true
+}
+
 // protectTasksDir makes the tasks/ directory read-only to prevent agents from
 // modifying embedded task source files during evaluation. Returns a restore
 // function that re-enables write permissions, or nil if protection was not needed.
@@ -2320,5 +2451,6 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalDryRun, "dry-run", false, "show what tasks would be run without executing")
 	evalCmd.Flags().BoolVar(&evalUseMCPTools, "use-mcp-tools", false, "inject MCP tool usage instructions into agent prompt")
 	evalCmd.Flags().BoolVar(&evalDisableMCP, "disable-mcp", false, "disable MCP tools for agents that support it (currently: opencode)")
+	evalCmd.Flags().BoolVar(&evalNoSandbox, "no-sandbox", false, "disable bubblewrap sandbox for agent processes")
 	evalCmd.Flags().StringVar(&evalResume, "resume", "", "resume eval from existing output directory")
 }

@@ -159,6 +159,7 @@ var DefaultAgents = map[string]AgentConfig{
 type Config struct {
 	Harness HarnessConfig          `toml:"harness"`
 	Docker  DockerConfig           `toml:"docker"`
+	Sandbox SandboxConfig          `toml:"sandbox"`
 	Agents  map[string]AgentConfig `toml:"agents"`
 }
 
@@ -168,6 +169,11 @@ type HarnessConfig struct {
 	DefaultTimeout int    `toml:"default_timeout"`
 	MaxAttempts    int    `toml:"max_attempts"`
 	OutputFormat   string `toml:"output_format"`
+}
+
+// SandboxConfig contains bubblewrap sandbox settings.
+type SandboxConfig struct {
+	WritableDirs []string `toml:"writable_dirs"` // Additional $HOME-relative dirs to mount writable
 }
 
 // DockerConfig contains Docker-related settings.

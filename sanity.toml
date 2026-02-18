@@ -17,6 +17,23 @@ zig_image = "ghcr.io/lemon07r/sanity-zig:latest"
 auto_pull = true            # automatically pull images if missing
 
 # =============================================================================
+# Sandbox Configuration
+# =============================================================================
+# The bubblewrap (bwrap) sandbox restricts agent filesystem access during eval.
+# $HOME is mounted read-only, with specific directories made writable so agents
+# can persist session data, auth tokens, and caches.
+#
+# Built-in writable dirs (always mounted if they exist):
+#   .cache, .config, .local,
+#   .amp, .ccs, .claude, .cline, .codex, .copilot, .crush,
+#   .factory, .gemini, .iflow, .kilocode, .kimi, .opencode,
+#   .pi, .qwen, .vibe
+#
+# Add extra $HOME-relative directories here for custom agents:
+[sandbox]
+# writable_dirs = [".my-agent", ".other-tool"]
+
+# =============================================================================
 # Agent Configuration
 # =============================================================================
 # Built-in agents with sensible defaults:
@@ -49,8 +66,16 @@ auto_pull = true            # automatically pull images if missing
 # command = "special"
 # args = ["run", "{prompt}", "--verbose", "--no-confirm"]
 
-# Azure-hosted Claude agent
+# Azure-hosted Claude agent (default)
 [agents.azure-claude]
+command = "claude"
+args = ["--print", "{prompt}"]
+model_flag = "--model"
+model_flag_position = "before"
+env = { ANTHROPIC_API_URL = "https://api.anthropic.com/v1", CLAUDE_USE_VERTEX = "false" }
+
+# Azure-hosted Claude Opus 4.6 model
+[agents.azure-claude-opus-4-6]
 command = "claude"
 args = ["--print", "{prompt}"]
 model_flag = "--model"
@@ -60,14 +85,22 @@ env = { ANTHROPIC_API_URL = "https://api.anthropic.com/v1", CLAUDE_USE_VERTEX = 
 # Cliproxy Kimi agent (Kimi K2.5 model)
 [agents.cliproxy-kimi]
 command = "cliproxy-kimi"
-args = ["--print", "{prompt}"]
+args = ["--quiet", "-p", "{prompt}"]
 model_flag = "--model"
 model_flag_position = "before"
 
 # Cliproxy Kimi K2.5 variant (explicit kimi-k2.5 model)
 [agents.cliproxy-kimi-k2-5]
 command = "cliproxy-kimi"
-args = ["--print", "{prompt}"]
+args = ["--quiet", "-p", "{prompt}"]
+model_flag = "--model"
+model_flag_position = "before"
+env = { CLIPROXY_MODEL = "kimi-k2.5" }
+
+# Cliproxy Kimi K2.5 (slash format)
+[agents."cliproxy-kimi/kimi-k2.5"]
+command = "cliproxy-kimi"
+args = ["--quiet", "-p", "{prompt}"]
 model_flag = "--model"
 model_flag_position = "before"
 env = { CLIPROXY_MODEL = "kimi-k2.5" }

@@ -152,7 +152,7 @@ fmt: ## Format code with goimports (handles import sorting)
 lint: ## Run golangci-lint
 	@printf '$(INFO) Running golangci-lint...\n'
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./...; \
+		golangci-lint run ./cmd/... ./internal/...; \
 	else \
 		printf '$(WARN) golangci-lint not found. Install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)\n'; \
 		exit 1; \

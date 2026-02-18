@@ -35,6 +35,7 @@ A lightweight evaluation harness for coding agents that runs high-signal, compac
 - **Watch Mode**: Automatically re-run tests on file changes
 - **Hidden Tests**: Additional validation applied only during eval
 - **Parallel Eval**: Run multiple tasks concurrently with `--parallel`
+- **Agent Sandboxing**: Bubblewrap isolation restricts agents to their workspace
 - **Persistent Caches**: Speed up builds with `.sanity-cache/` mounts
 
 ## Quick Start
@@ -43,6 +44,7 @@ A lightweight evaluation harness for coding agents that runs high-signal, compac
 
 - Go 1.25+
 - Docker (running daemon)
+- [bubblewrap](https://github.com/containers/bubblewrap) (optional, for agent sandboxing)
 
 ### Installation
 
@@ -98,6 +100,7 @@ make build    # Build the CLI
 ./sanity eval --agent droid --reasoning high          # Set reasoning effort
 ./sanity eval --agent gemini --use-mcp-tools          # Enable MCP tools
 ./sanity eval --agent opencode --disable-mcp          # Disable MCP tools
+./sanity eval --agent gemini --no-sandbox              # Disable bubblewrap sandbox
 ./sanity eval --resume ./eval-results/gemini-...      # Resume interrupted eval
 ```
 
