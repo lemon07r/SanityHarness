@@ -99,8 +99,9 @@ make build    # Build the CLI
 ./sanity eval --agent gemini --dry-run                # Preview without running
 ./sanity eval --agent droid --reasoning high          # Set reasoning effort
 ./sanity eval --agent gemini --use-mcp-tools          # Enable MCP tools
-./sanity eval --agent opencode --disable-mcp          # Disable MCP tools
-./sanity eval --agent gemini --no-sandbox              # Disable bubblewrap sandbox
+./sanity eval --agent opencode --disable-mcp          # Disable MCP tools / currently only supported for opencode
+./sanity eval --agent opencode --keep-workspaces      # Keep workspaces for debugging
+./sanity eval --agent gemini --no-sandbox             # Disable bubblewrap sandbox
 ./sanity eval --resume ./eval-results/gemini-...      # Resume interrupted eval
 ```
 
