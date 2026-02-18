@@ -53,10 +53,10 @@ var (
 
 // Quota retry configuration.
 const (
-	quotaMaxRetries  = 10
-	quotaRetryDelay1 = 30 * time.Second
-	quotaRetryDelay2 = 60 * time.Second
-	quotaRetryDelay3 = 120 * time.Second
+	quotaMaxRetries  = 3
+	quotaRetryDelay1 = 10 * time.Second
+	quotaRetryDelay2 = 30 * time.Second
+	quotaRetryDelay3 = 60 * time.Second
 
 	// Threshold for considering an agent log as an infra failure (empty or near-empty).
 	infraFailureLogThreshold = 10 // bytes
@@ -68,32 +68,57 @@ const (
 )
 
 // Patterns indicating recoverable rate limit errors (worth retrying).
+// These use contextual phrases to avoid false positives from bare numbers
+// appearing in durations (e.g. "0.503s"), UUIDs, git hashes, line numbers, etc.
 var recoverablePatterns = []string{
-	"429",
 	"rate limit",
 	"rate_limit",
 	"ratelimit",
 	"too many requests",
 	"overload",
-	"503",
-	"502",
-	"529",
 	"temporarily unavailable",
 	"try again later",
+	"try again",
 	"service unavailable",
+	"server error",
+	"bad gateway",
+	"http 429",
+	"http 502",
+	"http 503",
+	"http 529",
+	"status 429",
+	"status 502",
+	"status 503",
+	"status 529",
+	"error 429",
+	"error 502",
+	"error 503",
+	"error 529",
+	"code 429",
+	"code 502",
+	"code 503",
+	"code 529",
+	"429 too many",
+	"502 bad gateway",
+	"503 service",
+	"529 ",
+	"capacity",
 }
 
 // Patterns indicating non-recoverable quota errors (skip retries).
 var nonRecoverablePatterns = []string{
-	"reset after",
-	"monthly",
+	"quota reset",
+	"daily quota",
+	"monthly quota",
 	"billing",
 	"authentication failed",
 	"unauthorized",
 	"forbidden",
 	"invalid api key",
+	"api key invalid",
 	"exhausted your capacity",
 	"exceeded your current quota",
+	"subscription limit",
 }
 
 // EvalResult holds the result of evaluating a single task.
@@ -1129,7 +1154,8 @@ func executeAgentWithRetries(
 		hasError, isRecoverable := detectQuotaError(agentLogPath)
 		if !hasError {
 			// Check for infra failures (empty/near-empty logs).
-			if isInfraFailure(agentLogPath) {
+			// Pass workspaceDir so we can detect agents that write files but no stdout.
+			if isInfraFailure(agentLogPath, workspaceDir) {
 				if attempt == quotaMaxRetries {
 					result.quotaExhausted = true
 					logger.Debug("max retries reached for infra failure", "task", t.ID(), "retries", quotaMaxRetries)
@@ -1205,6 +1231,17 @@ func runAgentAttempt(
 			extraDirs = cfg.Sandbox.WritableDirs
 		}
 		cmd = wrapCommandWithSandbox(agentCtx, cmd, extraDirs)
+	}
+
+	// Run agent in its own process group so we can kill the entire tree on
+	// timeout or interrupt, preventing orphaned child processes.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Kill the entire process group (negative PID).
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
 	}
 
 	// Run agent
@@ -2167,7 +2204,10 @@ func getRetryDelay(attempt int) time.Duration {
 // (empty or near-empty output suggesting the provider never responded).
 // It strips retry separator lines and whitespace to avoid false negatives
 // when the log contains only retry markers but no actual agent output.
-func isInfraFailure(logPath string) bool {
+// If workspaceDir is non-empty, it also checks whether the agent modified any
+// files in the workspace — agents that write to files but produce no stdout
+// (e.g. droid, cline) are NOT infra failures.
+func isInfraFailure(logPath, workspaceDir string) bool {
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return true // No log file at all is an infra failure
@@ -2186,7 +2226,43 @@ func isInfraFailure(logPath string) bool {
 		}
 		meaningful = append(meaningful, trimmed...)
 	}
-	return len(meaningful) < infraFailureLogThreshold
+
+	if len(meaningful) >= infraFailureLogThreshold {
+		return false // Agent produced meaningful output
+	}
+
+	// Agent produced no/minimal stdout. Check if it modified workspace files.
+	// Some agents (droid, cline) legitimately produce no stdout but write files.
+	if workspaceDir != "" && hasModifiedFiles(workspaceDir) {
+		return false // Agent wrote files — not an infra failure
+	}
+
+	return true
+}
+
+// hasModifiedFiles checks if any files in the workspace directory were recently
+// modified (within the last hour). This detects agents that write to files but
+// produce no stdout output.
+func hasModifiedFiles(dir string) bool {
+	cutoff := time.Now().Add(-1 * time.Hour)
+	found := false
+
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().After(cutoff) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+
+	return found
 }
 
 // saveRunConfig saves the eval configuration for resume capability.

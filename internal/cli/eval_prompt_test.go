@@ -621,6 +621,227 @@ func TestBuildAgentCommand_EdgeCases(t *testing.T) {
 	})
 }
 
+func TestDetectQuotaError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		content         string
+		wantHasError    bool
+		wantRecoverable bool
+	}{
+		{
+			name:            "no error",
+			content:         "agent completed successfully",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "real http 429",
+			content:         "error=http 429 Too Many Requests: usage_limit_reached",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+		{
+			name:            "rate limit text",
+			content:         "Rate limit exceeded, please try again later",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+		{
+			name:            "503 service unavailable",
+			content:         "HTTP 503 Service Unavailable",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+		{
+			name:            "false positive duration 0.503s",
+			content:         "Total session time: 4m 1.503s",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive duration_ms 0.429",
+			content:         "duration_ms: 0.429788",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive uuid with 503",
+			content:         "session id: 019bf26e-a494-73d1-9ce1-6e146f503b01",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive git hash",
+			content:         "index 30801fd200a827f0aeb4c5f7a13cbda752e4dd40..b010d97cd7bcc30fb2e838f8fea452975963dcb2",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive line number 502",
+			content:         "502:         pub fn items(self: *Self) []T {",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive duration 0.824502",
+			content:         "duration_ms: 0.824502",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "non-recoverable billing",
+			content:         "billing limit exceeded",
+			wantHasError:    true,
+			wantRecoverable: false,
+		},
+		{
+			name:            "non-recoverable api key",
+			content:         "invalid api key provided",
+			wantHasError:    true,
+			wantRecoverable: false,
+		},
+		{
+			name:            "too many requests",
+			content:         "too many requests, slow down",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+		{
+			name:            "bad gateway",
+			content:         "502 Bad Gateway returned from API",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+		{
+			name:            "status 429",
+			content:         "received status 429 from server",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+		{
+			name:            "overloaded",
+			content:         "server is overloaded, please retry",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpFile := filepath.Join(t.TempDir(), "agent.log")
+			if err := os.WriteFile(tmpFile, []byte(tc.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			hasError, isRecoverable := detectQuotaError(tmpFile)
+			if hasError != tc.wantHasError {
+				t.Errorf("hasError = %v, want %v", hasError, tc.wantHasError)
+			}
+			if isRecoverable != tc.wantRecoverable {
+				t.Errorf("isRecoverable = %v, want %v", isRecoverable, tc.wantRecoverable)
+			}
+		})
+	}
+}
+
+func TestIsInfraFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		logContent  string
+		writeFiles  bool // whether to create files in workspace
+		wantFailure bool
+	}{
+		{
+			name:        "no log file",
+			logContent:  "",
+			wantFailure: true,
+		},
+		{
+			name:        "empty log",
+			logContent:  "",
+			writeFiles:  false,
+			wantFailure: true,
+		},
+		{
+			name:        "meaningful output",
+			logContent:  "Agent completed task successfully with all changes applied",
+			wantFailure: false,
+		},
+		{
+			name:        "only retry markers",
+			logContent:  "\n\n=== RETRY 1 (after 30s delay) ===\n\n\n\n=== RETRY 2 (after 1m0s delay) ===\n\n",
+			wantFailure: true,
+		},
+		{
+			name:        "only retry markers but files modified",
+			logContent:  "\n\n=== RETRY 1 (after 30s delay) ===\n\n",
+			writeFiles:  true,
+			wantFailure: false,
+		},
+		{
+			name:        "empty log but files modified (droid/cline pattern)",
+			logContent:  "",
+			writeFiles:  true,
+			wantFailure: false,
+		},
+		{
+			name:        "small output under threshold",
+			logContent:  "err",
+			wantFailure: true,
+		},
+		{
+			name:        "small output under threshold but files written",
+			logContent:  "err",
+			writeFiles:  true,
+			wantFailure: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			logPath := filepath.Join(tmpDir, "agent.log")
+			workspaceDir := filepath.Join(tmpDir, "workspace")
+			if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.name == "no log file" {
+				// Don't write the log file
+				result := isInfraFailure(logPath, workspaceDir)
+				if result != tc.wantFailure {
+					t.Errorf("isInfraFailure() = %v, want %v", result, tc.wantFailure)
+				}
+				return
+			}
+
+			if err := os.WriteFile(logPath, []byte(tc.logContent), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.writeFiles {
+				// Simulate agent writing files to workspace
+				if err := os.WriteFile(filepath.Join(workspaceDir, "solution.go"), []byte("package main"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			result := isInfraFailure(logPath, workspaceDir)
+			if result != tc.wantFailure {
+				t.Errorf("isInfraFailure() = %v, want %v", result, tc.wantFailure)
+			}
+		})
+	}
+}
+
 func TestBuildSandboxArgs(t *testing.T) {
 	t.Parallel()
 
