@@ -1235,14 +1235,7 @@ func runAgentAttempt(
 
 	// Run agent in its own process group so we can kill the entire tree on
 	// timeout or interrupt, preventing orphaned child processes.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		// Kill the entire process group (negative PID).
-		if cmd.Process != nil {
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
-	}
+	setupProcessGroup(cmd)
 
 	// Run agent
 	agentStart := time.Now()
@@ -1519,6 +1512,8 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string 
 	writableDirs := []string{
 		// XDG standard directories.
 		".cache", ".config", ".local",
+		// Language toolchain caches (agents may invoke npm/cargo on the host).
+		".npm", ".cargo", ".rustup", ".pub-cache", "go",
 		// Agent-specific directories.
 		".amp", ".ccs", ".claude", ".cline", ".codex", ".copilot", ".crush",
 		".factory", ".gemini", ".iflow", ".kilocode", ".kimi", ".opencode",
