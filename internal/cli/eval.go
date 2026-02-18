@@ -78,7 +78,7 @@ var recoverablePatterns = []string{
 	"overload",
 	"temporarily unavailable",
 	"try again later",
-	"try again",
+	"please try again",
 	"service unavailable",
 	"server error",
 	"bad gateway",
@@ -102,7 +102,7 @@ var recoverablePatterns = []string{
 	"502 bad gateway",
 	"503 service",
 	"529 ",
-	"capacity",
+	"capacity limit",
 }
 
 // Patterns indicating non-recoverable quota errors (skip retries).

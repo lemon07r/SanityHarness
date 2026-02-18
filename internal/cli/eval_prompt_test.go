@@ -726,6 +726,36 @@ func TestDetectQuotaError(t *testing.T) {
 			wantHasError:    true,
 			wantRecoverable: true,
 		},
+		{
+			name:            "false positive capacity in code description",
+			content:         "Uses a buffered channel as a semaphore with capacity equal to the limit",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive try again in algorithm",
+			content:         "If first char matches, consume one character and try again",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "false positive capacity in LRU cache",
+			content:         "Validates positive capacity\nProper eviction when cache is full",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "real exhausted capacity",
+			content:         "You have exhausted your capacity for this billing period",
+			wantHasError:    true,
+			wantRecoverable: false,
+		},
+		{
+			name:            "real please try again",
+			content:         "Service overloaded, please try again in a few minutes",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
 	}
 
 	for _, tc := range tests {
