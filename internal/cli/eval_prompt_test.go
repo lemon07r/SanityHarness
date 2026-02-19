@@ -783,14 +783,16 @@ func TestIsInfraFailure(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		logContent  string
-		writeFiles  bool // whether to create files in workspace
-		wantFailure bool
+		name          string
+		logContent    string
+		skipLog       bool // don't create the agent log file at all
+		writeFiles    bool // whether to create files in workspace
+		writeAgentLog bool // whether to place agent.log in workspace
+		wantFailure   bool
 	}{
 		{
 			name:        "no log file",
-			logContent:  "",
+			skipLog:     true,
 			wantFailure: true,
 		},
 		{
@@ -832,6 +834,12 @@ func TestIsInfraFailure(t *testing.T) {
 			writeFiles:  true,
 			wantFailure: false,
 		},
+		{
+			name:          "empty log with only agent.log in workspace (harness-created)",
+			logContent:    "",
+			writeAgentLog: true,
+			wantFailure:   true, // agent.log inside workspace should be ignored by hasModifiedFiles
+		},
 	}
 
 	for _, tc := range tests {
@@ -848,22 +856,21 @@ func TestIsInfraFailure(t *testing.T) {
 			// Use a cutoff before any file writes so agent-written files are detected.
 			workspaceReadyAt := time.Now().Add(-1 * time.Second)
 
-			if tc.name == "no log file" {
-				// Don't write the log file
-				result := isInfraFailure(logPath, workspaceDir, workspaceReadyAt)
-				if result != tc.wantFailure {
-					t.Errorf("isInfraFailure() = %v, want %v", result, tc.wantFailure)
+			if !tc.skipLog {
+				if err := os.WriteFile(logPath, []byte(tc.logContent), 0644); err != nil {
+					t.Fatal(err)
 				}
-				return
-			}
-
-			if err := os.WriteFile(logPath, []byte(tc.logContent), 0644); err != nil {
-				t.Fatal(err)
 			}
 
 			if tc.writeFiles {
 				// Simulate agent writing files to workspace
 				if err := os.WriteFile(filepath.Join(workspaceDir, "solution.go"), []byte("package main"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if tc.writeAgentLog {
+				if err := os.WriteFile(filepath.Join(workspaceDir, "agent.log"), []byte(""), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
