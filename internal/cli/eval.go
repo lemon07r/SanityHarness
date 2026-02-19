@@ -2259,6 +2259,11 @@ func hasModifiedFiles(dir string, cutoff time.Time) bool {
 		if err != nil || d.IsDir() {
 			return nil
 		}
+		// Skip agent.log — it is created by the harness (not the agent) inside
+		// the workspace dir, so its presence does not indicate agent activity.
+		if filepath.Base(path) == "agent.log" {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
