@@ -769,6 +769,23 @@ Examples:
 			return taskOrder[results[i].Task] < taskOrder[results[j].Task]
 		})
 
+		// Recompute status and weighted score for all results.
+		// Previous results loaded from summary.json during resume may lack
+		// these fields (they were never set due to a defer/named-return bug).
+		taskWeights := make(map[string]task.Weight)
+		for _, t := range allTasks {
+			taskWeights[t.ID()] = task.ComputeWeight(t)
+		}
+		for i := range results {
+			r := &results[i]
+			w, ok := taskWeights[r.Task]
+			if ok {
+				r.Weight = w.Base
+			}
+			r.Status = task.DetermineStatus(r.Passed, r.AgentTimedOut, r.Error)
+			r.WeightedScore = task.ScoreResult(r.Passed, r.AgentTimedOut, r.Error, w)
+		}
+
 		// Calculate pass rate
 		total := passed + failed
 		passRate := 0.0
@@ -978,10 +995,10 @@ Examples:
 	},
 }
 
-func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) EvalResult {
+func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) (result EvalResult) {
 	start := time.Now()
 	weight := task.ComputeWeight(t)
-	result := EvalResult{
+	result = EvalResult{
 		Task:       t.ID(),
 		Language:   string(t.Language),
 		Tier:       t.Tier,
