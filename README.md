@@ -154,7 +154,7 @@ See [docs/TASKS.md](docs/TASKS.md) for complete task listings and metadata.
 
 ## Configuration
 
-Create `sanity.toml` in your project root:
+Create `sanity.toml` in your project root (see `sanity.toml.example`):
 
 ```toml
 [harness]
@@ -211,6 +211,8 @@ env = { API_KEY = "xxx" }
 ```
 
 See [docs/CONFIGURATION.md#agent-configuration](docs/CONFIGURATION.md#agent-configuration) for full schema.
+
+> **Sandbox note:** `sanity eval` runs agents inside a [bubblewrap](https://github.com/containers/bubblewrap) sandbox where `$HOME` is read-only. All dot-directories under `$HOME` (e.g. `~/.my-agent/`) are automatically writable, so most agents work out of the box. For non-dot directories, add them to `sanity.toml` under `[sandbox] writable_dirs`. Use `--no-sandbox` to disable.
 
 ## How It Works
 

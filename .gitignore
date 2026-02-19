@@ -144,6 +144,9 @@ tmp/
 temp/
 *.tmp
 
+# User config (may contain personal agent definitions)
+sanity.toml
+
 # OS generated files
 Thumbs.db
 ehthumbs.db

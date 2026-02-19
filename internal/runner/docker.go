@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // ExecResult holds the result of executing a command in a container.
@@ -83,7 +85,9 @@ func (d *DockerClient) ImageExists(ctx context.Context, imageName string) (bool,
 
 // PullImage pulls an image from a registry.
 func (d *DockerClient) PullImage(ctx context.Context, imageName string) error {
-	reader, err := d.client.ImagePull(ctx, imageName, image.PullOptions{})
+	reader, err := d.client.ImagePull(ctx, imageName, image.PullOptions{
+		Platform: hostPlatformString(),
+	})
 	if err != nil {
 		return fmt.Errorf("pulling image %s: %w", imageName, err)
 	}
@@ -146,7 +150,7 @@ func (d *DockerClient) CreateContainer(ctx context.Context, cfg ContainerConfig)
 		}, cfg.Mounts...),
 	}
 
-	resp, err := d.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, cfg.Name)
+	resp, err := d.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, hostPlatform(), cfg.Name)
 	if err != nil {
 		return "", fmt.Errorf("creating container: %w", err)
 	}
@@ -296,4 +300,17 @@ func (d *DockerClient) Exec(ctx context.Context, containerID string, cmd []strin
 		Combined: stdout.String() + stderr.String(),
 		Duration: duration,
 	}, nil
+}
+
+// hostPlatform returns the OCI platform spec matching the host architecture.
+func hostPlatform() *ocispec.Platform {
+	return &ocispec.Platform{
+		OS:           "linux",
+		Architecture: runtime.GOARCH,
+	}
+}
+
+// hostPlatformString returns the platform string (e.g. "linux/arm64") for image pulls.
+func hostPlatformString() string {
+	return "linux/" + runtime.GOARCH
 }
