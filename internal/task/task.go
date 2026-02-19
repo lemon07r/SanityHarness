@@ -69,6 +69,15 @@ type Validation struct {
 	Args    []string `json:"args"    toml:"args"`
 }
 
+// VisibleFiles returns the files that should be visible to the agent initially.
+func (t *Task) VisibleFiles() []string {
+	files := make([]string, 0, len(t.Files.Stub)+len(t.Files.Test)+len(t.Files.Support))
+	files = append(files, t.Files.Stub...)
+	files = append(files, t.Files.Test...)
+	files = append(files, t.Files.Support...)
+	return files
+}
+
 // AllFiles returns all files associated with this task, including hidden tests.
 func (t *Task) AllFiles() []string {
 	files := make([]string, 0, len(t.Files.Stub)+len(t.Files.Test)+len(t.Files.HiddenTest)+len(t.Files.Support))
