@@ -9,6 +9,8 @@
 
 A lightweight evaluation harness for coding agents that runs high-signal, compact but challenging problems in isolated Docker containers. Evaluate agents across 26 tasks in 6 languages with weighted scoring, integrity verification, and detailed reporting.
 
+> **Note:** All evaluation results obtained before version `v1.6.0` cannot be compared to results obtained on or after `v1.6.0` due to a critical fix in how hidden tests are handled.
+
 <!-- Add demo GIF/screenshot here -->
 
 ## Table of Contents

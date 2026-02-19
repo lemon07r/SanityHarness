@@ -412,7 +412,7 @@ func (r *Runner) ensureWorkspace(t *task.Task, dir string) error {
 		return nil
 	}
 
-	return r.copyTaskFiles(t, dir, t.AllFiles())
+	return r.copyTaskFiles(t, dir, t.VisibleFiles())
 }
 
 // captureWorkspace reads the workspace files into the session.
@@ -500,7 +500,7 @@ func (r *Runner) InitWorkspaceForTask(t *task.Task, outputDir string) error {
 		return fmt.Errorf("directory is not empty: %s", absDir)
 	}
 
-	return r.copyTaskFiles(t, absDir, t.AllFiles())
+	return r.copyTaskFiles(t, absDir, t.VisibleFiles())
 }
 
 // ListTasks returns all available tasks.
