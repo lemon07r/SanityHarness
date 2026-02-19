@@ -34,7 +34,7 @@ LDFLAGS := -s -w \
 	-X '$(CLI_PKG).BuildDate=$(BUILD_TIME)'
 
 # Platforms for cross-compilation
-PLATFORMS := linux/amd64 darwin/arm64 windows/amd64
+PLATFORMS := linux/amd64 linux/arm64 darwin/arm64 windows/amd64
 
 # Tool versions (for CI reproducibility)
 GOLANGCI_LINT_VERSION := v2.7.2
@@ -223,7 +223,7 @@ bench: ## Run benchmarks
 ##@ Build (Cross-Compilation)
 
 .PHONY: build-all
-build-all: ## Build for all platforms (Linux/amd64, Darwin/arm64, Windows/amd64)
+build-all: ## Build for all platforms (Linux/amd64, Linux/arm64, Darwin/arm64, Windows/amd64)
 	@printf '$(BUILD) Building for all platforms...\n'
 	@mkdir -p $(BIN_DIR)
 	@for platform in $(PLATFORMS); do \
@@ -243,6 +243,13 @@ build-linux: ## Build for Linux/amd64
 	@mkdir -p $(BIN_DIR)
 	@GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
 	@printf '$(OK) Built: $(BIN_DIR)/$(BINARY_NAME)-linux-amd64\n'
+
+.PHONY: build-linux-arm64
+build-linux-arm64: ## Build for Linux/arm64
+	@printf '$(BUILD) Building for Linux/arm64...\n'
+	@mkdir -p $(BIN_DIR)
+	@GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
+	@printf '$(OK) Built: $(BIN_DIR)/$(BINARY_NAME)-linux-arm64\n'
 
 .PHONY: build-darwin
 build-darwin: ## Build for Darwin/arm64 (Apple Silicon)

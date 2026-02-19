@@ -50,9 +50,8 @@ jobs:
           # Windows amd64
           GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/sanity-windows-amd64.exe ./cmd/sanity
           
-          # Create checksums
-          cd dist
-          sha256sum * > checksums.txt
+          # Copy example config for distribution
+          cp sanity.toml.example dist/
 
       - name: Generate changelog
         id: changelog
@@ -86,7 +85,7 @@ jobs:
             dist/sanity-darwin-amd64
             dist/sanity-darwin-arm64
             dist/sanity-windows-amd64.exe
-            dist/checksums.txt
+            dist/sanity.toml.example
           draft: false
           prerelease: ${{ contains(github.ref, '-') }}
         env:

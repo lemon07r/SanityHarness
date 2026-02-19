@@ -524,7 +524,8 @@ Examples:
 		}
 
 		// Set up interrupt handler for graceful shutdown.
-		interrupted := setupInterruptHandler()
+		interruptCtx, interruptCancel := setupInterruptHandler()
+		defer interruptCancel()
 		var wasInterrupted bool
 
 		// Print header
@@ -574,7 +575,7 @@ Examples:
 			consecutiveQuotaExhausted := 0
 			for i, t := range tasksToRun {
 				// Check for interrupt before starting next task.
-				if checkInterrupted(interrupted) {
+				if checkInterrupted(interruptCtx) {
 					wasInterrupted = true
 					fmt.Println("\n\033[33m⚠ Interrupt received. Saving partial results...\033[0m")
 					break
@@ -584,7 +585,7 @@ Examples:
 				fmt.Printf(" [%d/%d] %s\n", i+1, len(tasksToRun), t.ID())
 				fmt.Println("─────────────────────────────────────────────────────────────")
 
-				result := runTaskWithAgent(r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
+				result := runTaskWithAgent(interruptCtx, r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
 				results = append(results, result)
 
 				if result.Passed {
@@ -640,7 +641,7 @@ Examples:
 				go func() {
 					defer wg.Done()
 					for j := range jobs {
-						res := runTaskWithAgent(r, j.t, evalAgent, evalModel, evalOutputDir, evalTimeout)
+						res := runTaskWithAgent(interruptCtx, r, j.t, evalAgent, evalModel, evalOutputDir, evalTimeout)
 						jobResults <- jobResult{idx: j.idx, r: res}
 					}
 				}()
@@ -701,7 +702,7 @@ Examples:
 				}
 
 				// Check for interrupt after each result.
-				shouldStop := checkInterrupted(interrupted)
+				shouldStop := checkInterrupted(interruptCtx)
 				stopReason := "Interrupt received"
 
 				// Also stop if we hit consecutive quota exhaustion threshold
@@ -977,7 +978,7 @@ Examples:
 	},
 }
 
-func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) EvalResult {
+func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) EvalResult {
 	start := time.Now()
 	weight := task.ComputeWeight(t)
 	result := EvalResult{
@@ -1031,7 +1032,7 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	agentLogPath := filepath.Join(workspaceDir, "agent.log")
 
 	// Execute agent with quota retry support
-	agentResult := executeAgentWithRetries(t, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent)
+	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent)
 	result.AgentTime = agentResult.totalTime
 	result.AgentTimedOut = agentResult.timedOut
 	result.QuotaRetries = agentResult.quotaRetries
@@ -1061,7 +1062,6 @@ func runTaskWithAgent(r *runner.Runner, t *task.Task, agent, model, outputDir st
 	// Run sanity harness to validate.
 	// Use at least 120s for validation regardless of the agent timeout,
 	// since some tasks (e.g. Dart isolate tests) need more time to run.
-	ctx := context.Background()
 	validationTimeout := timeout
 	if validationTimeout < 120 {
 		validationTimeout = 120
@@ -1125,6 +1125,7 @@ type agentExecutionResult struct {
 // It also detects infra failures (empty/near-empty agent logs) and retries
 // with aggressive backoff.
 func executeAgentWithRetries(
+	ctx context.Context,
 	t *task.Task,
 	agentCfg *config.AgentConfig,
 	prompt, model, workspaceDir, agentLogPath string,
@@ -1134,19 +1135,28 @@ func executeAgentWithRetries(
 	var result agentExecutionResult
 
 	for attempt := 0; attempt <= quotaMaxRetries; attempt++ {
-		// On retry, wait and log
+		// On retry, wait (interruptible) and log
 		if attempt > 0 {
 			delay := getRetryDelay(attempt)
 			logger.Info("retrying agent execution",
 				"task", t.ID(),
 				"attempt", attempt,
 				"delay", delay)
-			time.Sleep(delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				break
+			}
 			result.quotaRetries = attempt
 		}
 
+		// Check for interrupt before starting attempt.
+		if ctx.Err() != nil {
+			break
+		}
+
 		// Run single attempt
-		attemptResult := runAgentAttempt(agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, attempt)
+		attemptResult := runAgentAttempt(ctx, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, attempt)
 		result.totalTime += attemptResult.duration
 		result.timedOut = attemptResult.timedOut
 
@@ -1189,6 +1199,7 @@ type agentAttemptResult struct {
 
 // runAgentAttempt executes a single agent command attempt.
 func runAgentAttempt(
+	ctx context.Context,
 	agentCfg *config.AgentConfig,
 	prompt, model, workspaceDir, agentLogPath string,
 	agentTimeout time.Duration,
@@ -1197,7 +1208,7 @@ func runAgentAttempt(
 ) agentAttemptResult {
 	var result agentAttemptResult
 
-	agentCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	agentCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
 	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
@@ -1505,34 +1516,32 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string 
 	// Mount $HOME read-only so agents can access their own configs and binaries.
 	args = append(args, "--ro-bind", homeDir, homeDir)
 
-	// Allow agents to write to their own data/config/cache directories under $HOME.
-	// These bind mounts override the read-only $HOME mount above. Agents need write
-	// access to persist session data, logs, auth tokens, and caches during execution
-	// (e.g. droid→~/.factory, goose→~/.local/state, claude→~/.claude).
-	writableDirs := []string{
-		// XDG standard directories.
-		".cache", ".config", ".local",
-		// Language toolchain caches (agents may invoke npm/cargo on the host).
-		".npm", ".cargo", ".rustup", ".pub-cache", "go",
-		// Agent-specific directories.
-		".amp", ".ccs", ".claude", ".cline", ".codex", ".copilot", ".crush",
-		".factory", ".gemini", ".iflow", ".kilocode", ".kimi", ".opencode",
-		".pi", ".qwen", ".vibe",
-	}
+	// Allow agents to write to all dot-directories (hidden dirs) under $HOME.
+	// Instead of maintaining a per-agent whitelist, we enumerate existing
+	// dot-directories and mount them all writable. This covers XDG dirs
+	// (.cache, .config, .local), language toolchains (.npm, .cargo, .rustup),
+	// and any agent-specific directories (.claude, .gemini, .junie, etc.)
+	// without needing updates when new agents are added.
+	// Non-dot directories like "go" must still be listed explicitly.
+	explicitWritableDirs := []string{"go"}
 
 	// Merge user-configured writable dirs from [sandbox] config.
-	seen := make(map[string]bool, len(writableDirs))
-	for _, d := range writableDirs {
-		seen[d] = true
-	}
 	for _, d := range extraWritableDirs {
-		if !seen[d] {
-			seen[d] = true
-			writableDirs = append(writableDirs, d)
+		explicitWritableDirs = append(explicitWritableDirs, d)
+	}
+
+	// Mount all existing dot-directories under $HOME as writable.
+	if entries, err := os.ReadDir(homeDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), ".") {
+				absDir := filepath.Join(homeDir, e.Name())
+				args = append(args, "--bind", absDir, absDir)
+			}
 		}
 	}
 
-	for _, dir := range writableDirs {
+	// Mount explicitly listed non-dot directories.
+	for _, dir := range explicitWritableDirs {
 		absDir := filepath.Join(homeDir, dir)
 		if _, err := os.Stat(absDir); err == nil {
 			args = append(args, "--bind", absDir, absDir)
@@ -2412,21 +2421,26 @@ func cleanIncompleteTaskDirs(outputDir string, completed map[string]bool, allTas
 	return nil
 }
 
-// setupInterruptHandler creates a channel that receives interrupt signals.
-func setupInterruptHandler() chan os.Signal {
-	interrupted := make(chan os.Signal, 1)
-	signal.Notify(interrupted, os.Interrupt, syscall.SIGTERM)
-	return interrupted
+// setupInterruptHandler creates a context that is cancelled on interrupt signals.
+// The returned cancel function should be deferred to clean up signal handling.
+func setupInterruptHandler() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+		signal.Stop(sigCh)
+	}()
+	return ctx, cancel
 }
 
-// checkInterrupted checks if an interrupt signal has been received (non-blocking).
-func checkInterrupted(interrupted chan os.Signal) bool {
-	select {
-	case <-interrupted:
-		return true
-	default:
-		return false
-	}
+// checkInterrupted checks if an interrupt signal has been received.
+func checkInterrupted(ctx context.Context) bool {
+	return ctx.Err() != nil
 }
 
 // printResumeCommand prints the command to resume an interrupted eval.
