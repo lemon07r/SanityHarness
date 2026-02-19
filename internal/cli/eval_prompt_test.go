@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lemon07r/sanityharness/internal/config"
 	"github.com/lemon07r/sanityharness/internal/task"
@@ -844,9 +845,12 @@ func TestIsInfraFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			// Use a cutoff before any file writes so agent-written files are detected.
+			workspaceReadyAt := time.Now().Add(-1 * time.Second)
+
 			if tc.name == "no log file" {
 				// Don't write the log file
-				result := isInfraFailure(logPath, workspaceDir)
+				result := isInfraFailure(logPath, workspaceDir, workspaceReadyAt)
 				if result != tc.wantFailure {
 					t.Errorf("isInfraFailure() = %v, want %v", result, tc.wantFailure)
 				}
@@ -864,7 +868,7 @@ func TestIsInfraFailure(t *testing.T) {
 				}
 			}
 
-			result := isInfraFailure(logPath, workspaceDir)
+			result := isInfraFailure(logPath, workspaceDir, workspaceReadyAt)
 			if result != tc.wantFailure {
 				t.Errorf("isInfraFailure() = %v, want %v", result, tc.wantFailure)
 			}

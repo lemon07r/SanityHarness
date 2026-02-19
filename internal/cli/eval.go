@@ -1032,7 +1032,8 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	agentLogPath := filepath.Join(workspaceDir, "agent.log")
 
 	// Execute agent with quota retry support
-	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent)
+	workspaceReadyAt := time.Now()
+	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, workspaceReadyAt)
 	result.AgentTime = agentResult.totalTime
 	result.AgentTimedOut = agentResult.timedOut
 	result.QuotaRetries = agentResult.quotaRetries
@@ -1124,6 +1125,9 @@ type agentExecutionResult struct {
 // executeAgentWithRetries runs the agent command with quota-aware retry logic.
 // It also detects infra failures (empty/near-empty agent logs) and retries
 // with aggressive backoff.
+// workspaceReadyAt is the time when workspace setup completed (before the agent
+// started); it is used to distinguish harness-written files from agent-written
+// files when detecting infra failures.
 func executeAgentWithRetries(
 	ctx context.Context,
 	t *task.Task,
@@ -1131,6 +1135,7 @@ func executeAgentWithRetries(
 	prompt, model, workspaceDir, agentLogPath string,
 	agentTimeout time.Duration,
 	agent string,
+	workspaceReadyAt time.Time,
 ) agentExecutionResult {
 	var result agentExecutionResult
 
@@ -1165,7 +1170,7 @@ func executeAgentWithRetries(
 		if !hasError {
 			// Check for infra failures (empty/near-empty logs).
 			// Pass workspaceDir so we can detect agents that write files but no stdout.
-			if isInfraFailure(agentLogPath, workspaceDir) {
+			if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
 				if attempt == quotaMaxRetries {
 					result.quotaExhausted = true
 					logger.Debug("max retries reached for infra failure", "task", t.ID(), "retries", quotaMaxRetries)
@@ -1523,12 +1528,11 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string 
 	// and any agent-specific directories (.claude, .gemini, .junie, etc.)
 	// without needing updates when new agents are added.
 	// Non-dot directories like "go" must still be listed explicitly.
-	explicitWritableDirs := []string{"go"}
+	explicitWritableDirs := make([]string, 0, 1+len(extraWritableDirs))
+	explicitWritableDirs = append(explicitWritableDirs, "go")
 
 	// Merge user-configured writable dirs from [sandbox] config.
-	for _, d := range extraWritableDirs {
-		explicitWritableDirs = append(explicitWritableDirs, d)
-	}
+	explicitWritableDirs = append(explicitWritableDirs, extraWritableDirs...)
 
 	// Mount all existing dot-directories under $HOME as writable.
 	if entries, err := os.ReadDir(homeDir); err == nil {
@@ -2211,7 +2215,7 @@ func getRetryDelay(attempt int) time.Duration {
 // If workspaceDir is non-empty, it also checks whether the agent modified any
 // files in the workspace — agents that write to files but produce no stdout
 // (e.g. droid, cline) are NOT infra failures.
-func isInfraFailure(logPath, workspaceDir string) bool {
+func isInfraFailure(logPath, workspaceDir string, workspaceReadyAt time.Time) bool {
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return true // No log file at all is an infra failure
@@ -2237,18 +2241,18 @@ func isInfraFailure(logPath, workspaceDir string) bool {
 
 	// Agent produced no/minimal stdout. Check if it modified workspace files.
 	// Some agents (droid, cline) legitimately produce no stdout but write files.
-	if workspaceDir != "" && hasModifiedFiles(workspaceDir) {
+	if workspaceDir != "" && hasModifiedFiles(workspaceDir, workspaceReadyAt) {
 		return false // Agent wrote files — not an infra failure
 	}
 
 	return true
 }
 
-// hasModifiedFiles checks if any files in the workspace directory were recently
-// modified (within the last hour). This detects agents that write to files but
-// produce no stdout output.
-func hasModifiedFiles(dir string) bool {
-	cutoff := time.Now().Add(-1 * time.Hour)
+// hasModifiedFiles checks if any files in the workspace directory were modified
+// after the given cutoff time. This detects agents that write to files but
+// produce no stdout output, while ignoring files written by the harness during
+// workspace setup.
+func hasModifiedFiles(dir string, cutoff time.Time) bool {
 	found := false
 
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
