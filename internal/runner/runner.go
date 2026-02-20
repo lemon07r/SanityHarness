@@ -21,11 +21,11 @@ import (
 
 // Runner orchestrates task execution.
 type Runner struct {
-	cfg                *config.Config
-	taskLoader         *task.Loader
-	docker             *DockerClient
-	logger             *slog.Logger
-	LegacyHiddenTests  bool // When true, include hidden tests in workspace init (pre-v1.6.0 behavior)
+	cfg               *config.Config
+	taskLoader        *task.Loader
+	docker            *DockerClient
+	logger            *slog.Logger
+	LegacyHiddenTests bool // When true, include hidden tests in workspace init (pre-v1.6.0 behavior)
 }
 
 // NewRunner creates a new runner.
