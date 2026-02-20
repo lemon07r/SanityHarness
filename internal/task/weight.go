@@ -121,6 +121,7 @@ const (
 	StatusFail               ResultStatus = "fail"
 	StatusIntegrityViolation ResultStatus = "integrity_violation"
 	StatusError              ResultStatus = "error"
+	StatusInfraFailure       ResultStatus = "infra_failure"
 )
 
 // DetermineStatus computes the result status from pass/timeout/error state.
@@ -128,6 +129,9 @@ func DetermineStatus(passed, agentTimedOut bool, errorMsg string) ResultStatus {
 	if errorMsg != "" {
 		if contains(errorMsg, "modified task files") {
 			return StatusIntegrityViolation
+		}
+		if contains(errorMsg, "infra failure") {
+			return StatusInfraFailure
 		}
 		return StatusError
 	}

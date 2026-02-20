@@ -141,6 +141,7 @@ type EvalResult struct {
 	WeightedScore  float64           `json:"weighted_score,omitempty"`
 	QuotaRetries   int               `json:"quota_retries,omitempty"`
 	QuotaExhausted bool              `json:"quota_exhausted,omitempty"`
+	InfraFailure   bool              `json:"infra_failure,omitempty"`
 	WorkspaceDir   string            `json:"-"` // Not serialized, used for cleanup
 }
 
@@ -573,6 +574,7 @@ Examples:
 		// Run tasks
 		results := make([]EvalResult, 0, len(tasksToRun))
 		passed, failed := 0, 0
+		var infraFailedTasks []string // Tasks that failed due to infra issues (excluded from results)
 
 		parallel := evalParallel
 		if parallel <= 0 {
@@ -594,6 +596,28 @@ Examples:
 				fmt.Println("─────────────────────────────────────────────────────────────")
 
 				result := runTaskWithAgent(interruptCtx, r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
+
+				// Infra failures are excluded from results so they can be resumed later.
+				if result.InfraFailure {
+					fmt.Printf(" ⚠ INFRA FAILURE — will be skipped (resumable)\n")
+					infraFailedTasks = append(infraFailedTasks, t.ID())
+					// Delete workspace so resume picks it up as incomplete.
+					if result.WorkspaceDir != "" {
+						_ = os.RemoveAll(result.WorkspaceDir)
+					}
+					// Also remove the task output dir (agent.log copy).
+					taskOutputDir := filepath.Join(evalOutputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
+					_ = os.RemoveAll(taskOutputDir)
+					consecutiveQuotaExhausted++
+					if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
+						wasInterrupted = true
+						fmt.Printf("\n\033[33m⚠ Infra/quota failures for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
+						break
+					}
+					fmt.Println()
+					continue
+				}
+
 				results = append(results, result)
 
 				if result.Passed {
@@ -678,34 +702,51 @@ Examples:
 			consecutiveQuotaExhausted := 0
 		collectLoop:
 			for jr := range jobResults {
-				collected[jr.idx] = jr.r
 				seen++
 
-				status := "FAILED"
-				if jr.r.Passed {
-					status = "PASSED"
-				}
-				fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(tasksToRun), jr.r.Task, status, jr.r.Duration)
-				if !jr.r.Passed && jr.r.Error != "" {
-					fmt.Printf("   Error: %s\n", jr.r.Error)
-				}
-
-				if jr.r.Passed {
-					passed++
-					consecutiveQuotaExhausted = 0 // Reset counter on success
-				} else {
-					failed++
-					// Track consecutive quota exhaustion
-					if jr.r.QuotaExhausted {
-						consecutiveQuotaExhausted++
-					} else {
-						consecutiveQuotaExhausted = 0 // Reset on non-quota failure
+				// Infra failures are excluded from results so they can be resumed later.
+				if jr.r.InfraFailure {
+					fmt.Printf(" [%d/%d] %s ⚠ INFRA FAILURE — will be skipped (resumable)\n", seen, len(tasksToRun), jr.r.Task)
+					infraFailedTasks = append(infraFailedTasks, jr.r.Task)
+					if jr.r.WorkspaceDir != "" {
+						_ = os.RemoveAll(jr.r.WorkspaceDir)
 					}
-				}
+					// Remove task output dir (agent.log copy).
+					parts := strings.SplitN(jr.r.Task, "/", 2)
+					if len(parts) == 2 {
+						taskOutputDir := filepath.Join(evalOutputDir, parts[0]+"-"+parts[1])
+						_ = os.RemoveAll(taskOutputDir)
+					}
+					consecutiveQuotaExhausted++
+				} else {
+					collected[jr.idx] = jr.r
 
-				if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
-					if err := os.RemoveAll(jr.r.WorkspaceDir); err != nil {
-						logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
+					status := "FAILED"
+					if jr.r.Passed {
+						status = "PASSED"
+					}
+					fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(tasksToRun), jr.r.Task, status, jr.r.Duration)
+					if !jr.r.Passed && jr.r.Error != "" {
+						fmt.Printf("   Error: %s\n", jr.r.Error)
+					}
+
+					if jr.r.Passed {
+						passed++
+						consecutiveQuotaExhausted = 0 // Reset counter on success
+					} else {
+						failed++
+						// Track consecutive quota exhaustion
+						if jr.r.QuotaExhausted {
+							consecutiveQuotaExhausted++
+						} else {
+							consecutiveQuotaExhausted = 0 // Reset on non-quota failure
+						}
+					}
+
+					if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
+						if err := os.RemoveAll(jr.r.WorkspaceDir); err != nil {
+							logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
+						}
 					}
 				}
 
@@ -716,7 +757,7 @@ Examples:
 				// Also stop if we hit consecutive quota exhaustion threshold
 				if !shouldStop && consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
 					shouldStop = true
-					stopReason = fmt.Sprintf("Quota exhausted for %d consecutive tasks", consecutiveQuotaExhausted)
+					stopReason = fmt.Sprintf("Quota/infra failures for %d consecutive tasks", consecutiveQuotaExhausted)
 				}
 
 				if shouldStop {
@@ -725,20 +766,32 @@ Examples:
 					close(stopSending)
 					// Drain remaining results from in-flight tasks.
 					for jr := range jobResults {
-						collected[jr.idx] = jr.r
-						if jr.r.Passed {
-							passed++
+						if jr.r.InfraFailure {
+							infraFailedTasks = append(infraFailedTasks, jr.r.Task)
+							if jr.r.WorkspaceDir != "" {
+								_ = os.RemoveAll(jr.r.WorkspaceDir)
+							}
+							parts := strings.SplitN(jr.r.Task, "/", 2)
+							if len(parts) == 2 {
+								taskOutputDir := filepath.Join(evalOutputDir, parts[0]+"-"+parts[1])
+								_ = os.RemoveAll(taskOutputDir)
+							}
 						} else {
-							failed++
-						}
-						if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
-							_ = os.RemoveAll(jr.r.WorkspaceDir)
+							collected[jr.idx] = jr.r
+							if jr.r.Passed {
+								passed++
+							} else {
+								failed++
+							}
+							if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
+								_ = os.RemoveAll(jr.r.WorkspaceDir)
+							}
 						}
 					}
 					break collectLoop
 				}
 			}
-			// Only include results that were actually run.
+			// Only include results that were actually run (excluding infra failures).
 			for _, r := range collected {
 				if r.Task != "" {
 					results = append(results, r)
@@ -995,6 +1048,21 @@ Examples:
 
 		fmt.Println()
 
+		// Report infra failures and provide resume command.
+		if len(infraFailedTasks) > 0 {
+			fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+			fmt.Printf("\033[33m ⚠ %d task(s) skipped due to infrastructure failures:\033[0m\n", len(infraFailedTasks))
+			for _, t := range infraFailedTasks {
+				fmt.Printf("   • %s\n", t)
+			}
+			fmt.Println()
+			fmt.Println(" These tasks were not counted in the results above.")
+			fmt.Println(" To retry them, run:")
+			fmt.Printf("   ./sanity eval --resume %s\n", evalOutputDir)
+			fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+			fmt.Println()
+		}
+
 		// If interrupted, print resume command.
 		if wasInterrupted {
 			printResumeCommand(evalOutputDir)
@@ -1023,7 +1091,17 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	workspaceDir := filepath.Join(outputDir, workspaceName)
 	result.WorkspaceDir = workspaceDir // Track for cleanup
 
-	if err := r.InitWorkspaceForTask(t, workspaceDir); err != nil {
+	// Create an isolated temp workspace for the agent so it cannot read
+	// other eval results or sibling task directories. After the agent
+	// finishes, files are copied back to the real workspace for validation.
+	agentWorkDir, err := os.MkdirTemp("", fmt.Sprintf("sanity-eval-%s-%s-*", t.Language, t.Slug))
+	if err != nil {
+		result.Error = fmt.Sprintf("creating temp workspace: %v", err)
+		return result
+	}
+	defer func() { _ = os.RemoveAll(agentWorkDir) }()
+
+	if err := r.InitWorkspaceForTask(t, agentWorkDir); err != nil {
 		result.Error = fmt.Sprintf("init failed: %v", err)
 		return result
 	}
@@ -1055,21 +1133,33 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 		agentTimeout = time.Duration(t.AgentTimeout) * time.Second
 	}
 
-	agentLogPath := filepath.Join(workspaceDir, "agent.log")
+	// Place agent.log in the task output directory (eval-results/<run>/<lang>-<slug>/).
+	// This is outside the agent's temp workspace so the agent cannot read it.
+	taskOutputDir := filepath.Join(outputDir, workspaceName)
+	if err := os.MkdirAll(taskOutputDir, 0755); err != nil {
+		result.Error = fmt.Sprintf("creating task output dir: %v", err)
+		return result
+	}
+	agentLogPath := filepath.Join(taskOutputDir, "agent.log")
 
-	// Execute agent with quota retry support
+	// Execute agent in the isolated temp workspace
 	workspaceReadyAt := time.Now()
-	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, workspaceReadyAt)
+	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, agentWorkDir, agentLogPath, agentTimeout, agent, workspaceReadyAt)
 	result.AgentTime = agentResult.totalTime
 	result.AgentTimedOut = agentResult.timedOut
 	result.QuotaRetries = agentResult.quotaRetries
 	result.QuotaExhausted = agentResult.quotaExhausted
+	result.InfraFailure = agentResult.infraFailure
 
-	// Preserve agent log in eval output directory for debugging
-	copyAgentLog(agentLogPath, outputDir, t)
+	// If the agent never produced output (infra failure), skip validation entirely.
+	// The task will be excluded from results so it can be resumed later.
+	if agentResult.infraFailure {
+		result.Error = "infra failure: agent produced no output after retries"
+		return result
+	}
 
 	// Ensure the agent didn't modify task-owned files.
-	modified, err := detectModifiedTaskFiles(loader, t, workspaceDir)
+	modified, err := detectModifiedTaskFiles(loader, t, agentWorkDir)
 	if err != nil {
 		result.Error = fmt.Sprintf("integrity check failed: %v", err)
 		return result
@@ -1077,6 +1167,12 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	if len(modified) > 0 {
 		sort.Strings(modified)
 		result.Error = fmt.Sprintf("modified task files (disallowed): %s", strings.Join(modified, ", "))
+		return result
+	}
+
+	// Copy agent's work from temp workspace to the real workspace for validation.
+	if err := copyDirContents(agentWorkDir, workspaceDir); err != nil {
+		result.Error = fmt.Sprintf("copying agent workspace: %v", err)
 		return result
 	}
 
@@ -1126,11 +1222,8 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	// Save validation output to validation.log
 	if len(session.Attempts) > 0 {
 		lastAttempt := session.Attempts[len(session.Attempts)-1]
-		taskOutputDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
 		validationLogPath := filepath.Join(taskOutputDir, "validation.log")
-		if err := os.MkdirAll(taskOutputDir, 0755); err == nil {
-			_ = os.WriteFile(validationLogPath, []byte(lastAttempt.RawOutput), 0644)
-		}
+		_ = os.WriteFile(validationLogPath, []byte(lastAttempt.RawOutput), 0644)
 	}
 
 	return result
@@ -1149,6 +1242,7 @@ type agentExecutionResult struct {
 	timedOut       bool
 	quotaRetries   int
 	quotaExhausted bool
+	infraFailure   bool // true when agent produced no output after all retries
 }
 
 // executeAgentWithRetries runs the agent command with quota-aware retry logic.
@@ -1202,6 +1296,7 @@ func executeAgentWithRetries(
 			if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
 				if attempt == quotaMaxRetries {
 					result.quotaExhausted = true
+					result.infraFailure = true
 					logger.Debug("max retries reached for infra failure", "task", t.ID(), "retries", quotaMaxRetries)
 					break
 				}
@@ -1320,18 +1415,6 @@ func openAgentLogFile(agentLogPath string, attempt int) *os.File {
 	return logFile
 }
 
-// copyAgentLog copies the agent log to the eval output directory.
-func copyAgentLog(agentLogPath, outputDir string, t *task.Task) {
-	if _, err := os.Stat(agentLogPath); err == nil {
-		agentLogDst := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug), "agent.log")
-		if err := os.MkdirAll(filepath.Dir(agentLogDst), 0755); err == nil {
-			if srcData, err := os.ReadFile(agentLogPath); err == nil {
-				_ = os.WriteFile(agentLogDst, srcData, 0644)
-			}
-		}
-	}
-}
-
 func buildAgentPrompt(t *task.Task, useMCPTools bool) string {
 	stubFiles := make([]string, 0, len(t.Files.Stub))
 	for _, f := range t.Files.Stub {
@@ -1373,7 +1456,8 @@ RULES:
 - ONLY edit the stub/solution source file(s).
 - Do NOT modify test files or support files.
 - You may add new helper source files if needed.
-- Evaluation fails if you modify protected files.`,
+- Evaluation fails if you modify protected files.
+- Do NOT navigate to parent directories or read files outside the workspace.`,
 		t.Name, t.Language, t.Tier, t.Difficulty, t.Description,
 		strings.Join(stubFiles, ", "), strings.Join(testFiles, ", "),
 		t.Language)
@@ -1433,6 +1517,45 @@ func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir s
 		}
 	}
 	return nil
+}
+
+// copyDirContents recursively copies all files and directories from src to dst.
+// It preserves directory structure and file permissions.
+func copyDirContents(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(dst, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(destPath, 0755)
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		// Skip symlinks
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", rel, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(destPath, data, info.Mode().Perm())
+	})
 }
 
 // buildAgentCommand creates an exec.Cmd for the given agent configuration.
@@ -1581,11 +1704,13 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string 
 		}
 	}
 
-	// Workspace is the only persistent writable directory outside $HOME.
-	args = append(args, "--bind", workspaceDir, workspaceDir)
-
 	// /tmp for temporary files.
 	args = append(args, "--tmpfs", "/tmp")
+
+	// Workspace is the only persistent writable directory outside $HOME.
+	// Mounted after --tmpfs /tmp so it takes precedence when the workspace
+	// is inside /tmp (which it is during eval for isolation).
+	args = append(args, "--bind", workspaceDir, workspaceDir)
 
 	// Required virtual filesystems.
 	args = append(args, "--dev", "/dev")
