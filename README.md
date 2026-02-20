@@ -9,7 +9,7 @@
 
 A lightweight evaluation harness for coding agents that runs high-signal, compact but challenging problems in isolated Docker containers. Evaluate agents across 26 tasks in 6 languages with weighted scoring, integrity verification, and detailed reporting.
 
-> **Note:** All evaluation results obtained before version `v1.6.0` cannot be compared to results obtained on or after `v1.6.0` due to a critical fix in how hidden tests are handled.
+> **Note:** All evaluation results obtained before version `v1.6.0` cannot be compared to results obtained on or after `v1.6.0` due to a critical fix in how hidden tests are handled. Version `v1.6.1` fixes a timeout regression (default was incorrectly 30s instead of 120s) and adds the `--legacy` flag.
 
 <!-- Add demo GIF/screenshot here -->
 
@@ -104,6 +104,7 @@ make build    # Build the CLI
 ./sanity eval --agent opencode --disable-mcp          # Disable MCP tools / currently only supported for opencode
 ./sanity eval --agent opencode --keep-workspaces      # Keep workspaces for debugging
 ./sanity eval --agent gemini --no-sandbox             # Disable bubblewrap sandbox
+./sanity eval --agent gemini --legacy                 # Legacy mode (hidden tests visible to agent)
 ./sanity eval --resume ./eval-results/gemini-...      # Resume interrupted eval
 ```
 
@@ -215,6 +216,8 @@ env = { API_KEY = "xxx" }
 See [docs/CONFIGURATION.md#agent-configuration](docs/CONFIGURATION.md#agent-configuration) for full schema.
 
 > **Sandbox note:** `sanity eval` runs agents inside a [bubblewrap](https://github.com/containers/bubblewrap) sandbox where `$HOME` is read-only. All dot-directories under `$HOME` (e.g. `~/.my-agent/`) are automatically writable, so most agents work out of the box. For non-dot directories, add them to `sanity.toml` under `[sandbox] writable_dirs`. Use `--no-sandbox` to disable.
+
+> **Legacy mode:** Prior to v1.6.0, a bug caused hidden tests to be included in the workspace during `sanity eval`, making them visible to agents. The `--legacy` flag reproduces this behavior so that older evaluation runs can be fairly compared or resumed. When `--legacy` is active, hidden test files are written to the workspace at init time (instead of being overlaid just before validation), and the hidden-test overlay step is skipped. Use this flag when resuming runs that were originally executed with the buggy behavior.
 
 ## How It Works
 

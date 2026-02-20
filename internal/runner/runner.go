@@ -21,10 +21,11 @@ import (
 
 // Runner orchestrates task execution.
 type Runner struct {
-	cfg        *config.Config
-	taskLoader *task.Loader
-	docker     *DockerClient
-	logger     *slog.Logger
+	cfg                *config.Config
+	taskLoader         *task.Loader
+	docker             *DockerClient
+	logger             *slog.Logger
+	LegacyHiddenTests  bool // When true, include hidden tests in workspace init (pre-v1.6.0 behavior)
 }
 
 // NewRunner creates a new runner.
@@ -412,7 +413,11 @@ func (r *Runner) ensureWorkspace(t *task.Task, dir string) error {
 		return nil
 	}
 
-	return r.copyTaskFiles(t, dir, t.VisibleFiles())
+	files := t.VisibleFiles()
+	if r.LegacyHiddenTests {
+		files = t.AllFiles()
+	}
+	return r.copyTaskFiles(t, dir, files)
 }
 
 // captureWorkspace reads the workspace files into the session.
@@ -500,7 +505,11 @@ func (r *Runner) InitWorkspaceForTask(t *task.Task, outputDir string) error {
 		return fmt.Errorf("directory is not empty: %s", absDir)
 	}
 
-	return r.copyTaskFiles(t, absDir, t.VisibleFiles())
+	files := t.VisibleFiles()
+	if r.LegacyHiddenTests {
+		files = t.AllFiles()
+	}
+	return r.copyTaskFiles(t, absDir, files)
 }
 
 // ListTasks returns all available tasks.

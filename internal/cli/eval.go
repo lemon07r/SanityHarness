@@ -47,6 +47,7 @@ var (
 	evalUseMCPTools    bool
 	evalDisableMCP     bool
 	evalNoSandbox      bool
+	evalLegacy         bool
 	evalSandboxActive  bool
 	evalResume         string
 )
@@ -184,6 +185,7 @@ type EvalSummary struct {
 	UseMCPTools         bool                     `json:"use_mcp_tools,omitempty"`
 	DisableMCP          bool                     `json:"disable_mcp,omitempty"`
 	Sandbox             bool                     `json:"sandbox,omitempty"`
+	Legacy              bool                     `json:"legacy,omitempty"`
 	QuotaAffectedTasks  int                      `json:"quota_affected_tasks,omitempty"`
 	TotalQuotaRetries   int                      `json:"total_quota_retries,omitempty"`
 }
@@ -202,6 +204,7 @@ type RunConfig struct {
 	UseMCPTools    bool     `json:"use_mcp_tools,omitempty"`
 	DisableMCP     bool     `json:"disable_mcp,omitempty"`
 	NoSandbox      bool     `json:"no_sandbox,omitempty"`
+	Legacy         bool     `json:"legacy,omitempty"`
 	KeepWorkspaces bool     `json:"keep_workspaces,omitempty"`
 	TaskList       []string `json:"task_list"`
 	CreatedAt      string   `json:"created_at"`
@@ -322,6 +325,11 @@ Examples:
 			return err
 		}
 		defer func() { _ = r.Close() }()
+
+		if evalLegacy {
+			r.LegacyHiddenTests = true
+			logger.Info("legacy mode enabled: hidden tests exposed to agent (pre-v1.6.0 behavior)")
+		}
 
 		// If the user specified another selector, default tier should not hide tasks.
 		tierChanged := cmd.Flags().Changed("tier")
@@ -926,6 +934,7 @@ Examples:
 			UseMCPTools:         evalUseMCPTools,
 			DisableMCP:          evalDisableMCP,
 			Sandbox:             evalSandboxActive,
+			Legacy:              evalLegacy,
 			QuotaAffectedTasks:  quotaAffectedTasks,
 			TotalQuotaRetries:   totalQuotaRetries,
 		}
@@ -1072,9 +1081,12 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	}
 
 	// Add hidden tests (not shown to the agent) before validation.
-	if err := writeTaskFilesToWorkspace(loader, t, workspaceDir, t.HiddenTestFiles()); err != nil {
-		result.Error = fmt.Sprintf("writing hidden tests: %v", err)
-		return result
+	// In legacy mode, hidden tests are already in the workspace from init.
+	if !evalLegacy {
+		if err := writeTaskFilesToWorkspace(loader, t, workspaceDir, t.HiddenTestFiles()); err != nil {
+			result.Error = fmt.Sprintf("writing hidden tests: %v", err)
+			return result
+		}
 	}
 
 	// Run sanity harness to validate.
@@ -1982,6 +1994,7 @@ type LeaderboardSubmission struct {
 	UseMCPTools bool `json:"use_mcp_tools,omitempty"`
 	DisableMCP  bool `json:"disable_mcp,omitempty"`
 	Sandbox     bool `json:"sandbox,omitempty"`
+	Legacy      bool `json:"legacy,omitempty"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -2026,6 +2039,7 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 	submission.UseMCPTools = summary.UseMCPTools
 	submission.DisableMCP = summary.DisableMCP
 	submission.Sandbox = summary.Sandbox
+	submission.Legacy = summary.Legacy
 
 	// Convert language stats
 	for lang, agg := range summary.ByLanguage {
@@ -2077,6 +2091,9 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	}
 	if summary.Sandbox {
 		sb.WriteString("| Sandbox | Yes |\n")
+	}
+	if summary.Legacy {
+		sb.WriteString("| Legacy Mode | Yes |\n")
 	}
 	fmt.Fprintf(sb, "| Timestamp | %s |\n", summary.Timestamp)
 	fmt.Fprintf(sb, "| Pass Rate | **%.1f%%** (%d/%d) |\n", summary.PassRate, summary.Passed, summary.Total)
@@ -2315,6 +2332,7 @@ func saveRunConfig(outputDir string, allTasks []*task.Task) error {
 		UseMCPTools:    evalUseMCPTools,
 		DisableMCP:     evalDisableMCP,
 		NoSandbox:      evalNoSandbox,
+		Legacy:         evalLegacy,
 		KeepWorkspaces: evalKeepWorkspaces,
 		TaskList:       taskList,
 		CreatedAt:      time.Now().Format(time.RFC3339),
@@ -2357,6 +2375,7 @@ func applyRunConfig(runCfg *RunConfig) {
 	evalUseMCPTools = runCfg.UseMCPTools
 	evalDisableMCP = runCfg.DisableMCP
 	evalNoSandbox = runCfg.NoSandbox
+	evalLegacy = runCfg.Legacy
 	evalKeepWorkspaces = runCfg.KeepWorkspaces
 }
 
@@ -2563,5 +2582,6 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalUseMCPTools, "use-mcp-tools", false, "inject MCP tool usage instructions into agent prompt")
 	evalCmd.Flags().BoolVar(&evalDisableMCP, "disable-mcp", false, "disable MCP tools for agents that support it (currently: opencode)")
 	evalCmd.Flags().BoolVar(&evalNoSandbox, "no-sandbox", false, "disable bubblewrap sandbox for agent processes")
+	evalCmd.Flags().BoolVar(&evalLegacy, "legacy", false, "expose hidden tests to agent during workspace init (pre-v1.6.0 behavior)")
 	evalCmd.Flags().StringVar(&evalResume, "resume", "", "resume eval from existing output directory")
 }
