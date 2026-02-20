@@ -9,7 +9,7 @@
 
 A lightweight evaluation harness for coding agents that runs high-signal, compact but challenging problems in isolated Docker containers. Evaluate agents across 26 tasks in 6 languages with weighted scoring, integrity verification, and detailed reporting.
 
-> **Note:** All evaluation results obtained before version `v1.6.0` cannot be compared to results obtained on or after `v1.6.0` due to a critical fix in how hidden tests are handled. Version `v1.6.1` fixes a timeout regression (default was incorrectly 30s instead of 120s) and adds the `--legacy` flag.
+> **Note:** All evaluation results obtained before version `v1.6.0` cannot be compared to results obtained on or after `v1.6.0` due to a critical fix in how hidden tests are handled, unless you use the --legacy flag. From here on, we will probably be introducing breaking changes to improve the eval for fairness and better evaluation. Once we are happy with all the improvements this will probably birth a new v2 leaderboard. For now current leaderboard is in maintenance mode and will only be getting a few new updates, and reruns if any bugs are found that affected fairness. 
 
 <!-- Add demo GIF/screenshot here -->
 
