@@ -86,6 +86,8 @@ func init() {
 	rootCmd.AddCommand(evalCmd)
 	rootCmd.AddCommand(cleanCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(compareCmd)
+	rootCmd.AddCommand(batchCmd)
 }
 
 // Version information (set by build flags).

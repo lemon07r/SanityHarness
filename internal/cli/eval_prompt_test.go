@@ -75,7 +75,7 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	promptWithMCP := buildAgentPrompt(tt, true, "")
 	for _, s := range []string{
 		"MCP TOOLS:",
-  "proactively as you can",
+		"proactively as you can",
 	} {
 		if !strings.Contains(promptWithMCP, s) {
 			t.Fatalf("prompt with MCP tools missing %q\n\nPrompt:\n%s", s, promptWithMCP)

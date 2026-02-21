@@ -1,6 +1,6 @@
 # Road to v2.x.x Overhaul: What's Changed Since v1.6.1
 
-If you want the short version: `1.7.x` is a fairness and reliability release. We reduced information leakage during eval, made infrastructure failures easier to reason about, and tightened task contracts where hidden requirements were too implicit.
+If you want the short version: `1.7.x` is a fairness and reliability release. We reduced information leakage during eval, made infrastructure failures easier to reason about, and tightened task contracts where hidden requirements were too implicit. `1.8.x` adds multi-run orchestration for statistical rigor and cross-agent comparison.
 
 ## Why we changed anything
 
@@ -9,7 +9,7 @@ By the time we reached `v1.6.1`, we had enough evaluation history to see recurri
 - transient agent or infrastructure problems were being mixed with normal failures,
 - and a few tasks required behavior that was technically tested but not clearly stated.
 
-`1.7.x` is the pass where we cleaned those up.
+`1.7.x` is the pass where we cleaned those up. `1.8.x` builds on that foundation to make multi-run evaluation a first-class workflow.
 
 ## What changed in evaluation behavior
 
@@ -69,6 +69,24 @@ The intent here was high-signal evaluation: remove "mind-reading" requirements, 
 The `--use-mcp-tools` prompt was rewritten to be minimal and neutral. The previous prompt included workflow coaching (read files, search code, don't guess) that could inflate scores independent of actual MCP tool usage. The new prompt is a single sentence nudging the agent to use its MCP tools proactively, without teaching problem-solving strategy. This makes with-vs-without comparisons fairer.
 
 A new `mcp_prompt` config field was added to `AgentConfig`, allowing per-agent MCP tool guidance (e.g., telling Gemini to use `@web` search). This is appended under an `AGENT-SPECIFIC TOOLS:` header when `--use-mcp-tools` is set.
+
+## What changed in v1.8.0 — multi-run orchestration
+
+Single eval runs are useful for quick checks, but meaningful comparison requires repetition and side-by-side analysis. `1.8.0` adds three complementary features that share a common orchestration layer:
+
+**`--repeat N` flag.** Run the same eval configuration N times to measure variance. Each repeat gets its own subdirectory under a multi-run parent, and the harness produces aggregate statistics (mean, stddev, min, max) for pass rate and weighted score across repeats.
+
+**Comma-separated multi-agent.** Quick A/B comparison from the CLI without batch files. `--agent codex,opencode --model gpt-5.2,kimi-k2.5` broadcasts shared flags across agents and produces a multi-run directory with per-agent subdirectories and a comparison summary. The `--repeat` flag composes with multi-agent: `--agent codex,opencode --repeat 3` produces 6 total runs.
+
+**`sanity batch --config runs.toml`.** For complex multi-run configurations with per-run overrides, shared defaults, and repeat support. The batch file is TOML with a `[shared]` section for defaults and `[[runs]]` entries for per-run overrides.
+
+**`sanity compare <dir1> <dir2> ...`.** Load summaries from multiple eval result directories and produce a side-by-side comparison table. Works with any combination of single-run and multi-run directories.
+
+The internal change that enables all of this is the extraction of the monolithic `evalCmd.RunE` into a reusable `evalRunSingle()` function. The top-level `RunE` is now a thin orchestration wrapper that parses multi-agent specs, manages the multi-run directory structure, and delegates individual runs.
+
+Multi-run directories use a `multi-run.json` config and `multi-run-state.json` for resume support. Interrupted multi-runs can be resumed with `--resume`, which detects completed sub-runs and continues from where it left off.
+
+Phase 5 (parallel runs with `--parallel-runs`) is deferred to a future release.
 
 ## Compatibility and comparing old runs
 

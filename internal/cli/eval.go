@@ -50,6 +50,7 @@ var (
 	evalLegacy         bool
 	evalSandboxActive  bool
 	evalResume         string
+	evalRepeat         int
 )
 
 // Quota retry configuration.
@@ -201,6 +202,29 @@ type EvalSummary struct {
 	TotalQuotaRetries   int                      `json:"total_quota_retries,omitempty"`
 }
 
+// RunSpec defines a single eval run's configuration.
+type RunSpec struct {
+	Agent     string `json:"agent"`
+	Model     string `json:"model,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
+}
+
+// SharedConfig holds settings common to all runs.
+type SharedConfig struct {
+	Tier           string
+	Difficulty     string
+	Lang           string
+	Tasks          string
+	Timeout        int
+	Parallel       int
+	KeepWorkspaces bool
+	UseMCPTools    bool
+	DisableMCP     bool
+	NoSandbox      bool
+	Legacy         bool
+	DryRun         bool
+}
+
 // RunConfig stores the original eval configuration for resume capability.
 type RunConfig struct {
 	Agent          string   `json:"agent"`
@@ -268,6 +292,18 @@ Examples:
 			}
 		}
 
+		if evalRepeat < 1 {
+			evalRepeat = 1
+		}
+
+		shared := SharedConfig{
+			Tier: evalTier, Difficulty: evalDifficulty, Lang: evalLang,
+			Tasks: evalTasks, Timeout: evalTimeout, Parallel: evalParallel,
+			KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
+			DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
+			Legacy: evalLegacy, DryRun: evalDryRun,
+		}
+
 		// Track if we're resuming a previous run.
 		var isResuming bool
 		var previousResults []EvalResult
@@ -278,6 +314,11 @@ Examples:
 		// Handle resume mode: load config and apply settings.
 		var prevAttestation *EvalAttestation
 		if evalResume != "" {
+			// Check if this is a multi-run directory.
+			if isMultiRunDir(evalResume) {
+				return resumeMultiRun(evalResume)
+			}
+
 			var err error
 			runCfg, err = loadRunConfig(evalResume)
 			if err != nil {
@@ -286,6 +327,15 @@ Examples:
 			applyRunConfig(runCfg)
 			evalOutputDir = evalResume
 			isResuming = true
+
+			// Re-build shared from restored globals.
+			shared = SharedConfig{
+				Tier: evalTier, Difficulty: evalDifficulty, Lang: evalLang,
+				Tasks: evalTasks, Timeout: evalTimeout, Parallel: evalParallel,
+				KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
+				DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
+				Legacy: evalLegacy, DryRun: evalDryRun,
+			}
 
 			completedTasks, err = findCompletedTasks(evalOutputDir)
 			if err != nil {
@@ -312,22 +362,42 @@ Examples:
 			timestamp = time.Now().Format("2006-01-02T150405")
 		}
 
-		// Dry-run mode doesn't require agent to be installed
+		// Parse comma-separated agent/model/reasoning for multi-agent support.
+		agents := strings.Split(evalAgent, ",")
+		for i := range agents {
+			agents[i] = strings.TrimSpace(agents[i])
+		}
+		models, err := broadcastOrSplit(evalModel, len(agents), "model")
+		if err != nil {
+			return err
+		}
+		reasonings, err := broadcastOrSplit(evalReasoning, len(agents), "reasoning")
+		if err != nil {
+			return err
+		}
+
+		var specs []RunSpec
+		for i := range agents {
+			specs = append(specs, RunSpec{
+				Agent: agents[i], Model: models[i], Reasoning: reasonings[i],
+			})
+		}
+		isMultiRun := len(specs) > 1 || evalRepeat > 1
+
+		// Dry-run mode doesn't require agent to be installed.
 		if !evalDryRun {
-			if evalAgent == "" {
-				return fmt.Errorf("--agent is required (use --help to see available agents)")
-			}
-
-			// Validate agent exists in config
-			agentCfg := cfg.GetAgent(evalAgent)
-			if agentCfg == nil {
-				available := strings.Join(cfg.ListAgents(), ", ")
-				return fmt.Errorf("unknown agent: %s (available: %s)", evalAgent, available)
-			}
-
-			// Check agent binary is installed
-			if _, err := exec.LookPath(agentCfg.Command); err != nil {
-				return fmt.Errorf("agent %q binary %q not found in PATH", evalAgent, agentCfg.Command)
+			for _, spec := range specs {
+				if spec.Agent == "" {
+					return fmt.Errorf("--agent is required (use --help to see available agents)")
+				}
+				agentCfg := cfg.GetAgent(spec.Agent)
+				if agentCfg == nil {
+					available := strings.Join(cfg.ListAgents(), ", ")
+					return fmt.Errorf("unknown agent: %s (available: %s)", spec.Agent, available)
+				}
+				if _, err := exec.LookPath(agentCfg.Command); err != nil {
+					return fmt.Errorf("agent %q binary %q not found in PATH", spec.Agent, agentCfg.Command)
+				}
 			}
 		}
 
@@ -337,22 +407,23 @@ Examples:
 		}
 		defer func() { _ = r.Close() }()
 
-		if evalLegacy {
+		if shared.Legacy {
 			r.LegacyHiddenTests = true
 			logger.Info("legacy mode enabled: hidden tests exposed to agent (pre-v1.6.0 behavior)")
 		}
 
 		// If the user specified another selector, default tier should not hide tasks.
 		tierChanged := cmd.Flags().Changed("tier")
-		if !tierChanged && (evalLang != "" || evalTasks != "" || evalDifficulty != "") {
+		if !tierChanged && (shared.Lang != "" || shared.Tasks != "" || shared.Difficulty != "") {
+			shared.Tier = "all"
 			evalTier = "all"
 		}
 
-		switch evalTier {
+		switch shared.Tier {
 		case "", "core", "extended", "all":
 			// OK
 		default:
-			return fmt.Errorf("invalid --tier %q (valid: core, extended, all)", evalTier)
+			return fmt.Errorf("invalid --tier %q (valid: core, extended, all)", shared.Tier)
 		}
 
 		// Get tasks to run
@@ -433,30 +504,38 @@ Examples:
 		}
 
 		// Dry-run mode: print what would be executed and exit
-		if evalDryRun {
+		if shared.DryRun {
 			fmt.Println()
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			fmt.Println(" SANITY HARNESS - Dry Run")
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			fmt.Println()
-			if evalAgent != "" {
-				fmt.Printf(" Agent:      %s\n", evalAgent)
+			for _, spec := range specs {
+				if spec.Agent != "" {
+					fmt.Printf(" Agent:      %s\n", spec.Agent)
+				}
+				if spec.Model != "" {
+					fmt.Printf(" Model:      %s\n", spec.Model)
+				}
+				if spec.Reasoning != "" {
+					fmt.Printf(" Reasoning:  %s\n", spec.Reasoning)
+				}
 			}
-			if evalModel != "" {
-				fmt.Printf(" Model:      %s\n", evalModel)
+			if shared.Tier != "" {
+				fmt.Printf(" Tier:       %s\n", shared.Tier)
 			}
-			if evalTier != "" {
-				fmt.Printf(" Tier:       %s\n", evalTier)
+			if shared.Difficulty != "" {
+				fmt.Printf(" Difficulty: %s\n", shared.Difficulty)
 			}
-			if evalDifficulty != "" {
-				fmt.Printf(" Difficulty: %s\n", evalDifficulty)
+			if evalRepeat > 1 {
+				fmt.Printf(" Repeat:     %d\n", evalRepeat)
 			}
 			fmt.Printf(" Tasks:      %d\n", len(allTasks))
 			fmt.Println()
 			fmt.Println(" Tasks that would be executed:")
 			fmt.Println("─────────────────────────────────────────────────────────────")
 			for i, t := range allTasks {
-				timeout := evalTimeout
+				timeout := shared.Timeout
 				if t.AgentTimeout > 0 {
 					timeout = t.AgentTimeout
 				}
@@ -468,74 +547,10 @@ Examples:
 			return nil
 		}
 
-		// Create output directory
-		if evalOutputDir == "" {
-			evalOutputDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", evalAgent, timestamp))
-		}
-		if err := os.MkdirAll(evalOutputDir, 0755); err != nil {
-			return fmt.Errorf("creating output directory: %w", err)
-		}
-
-		// For resume mode: filter out completed tasks and clean incomplete dirs.
-		var tasksToRun []*task.Task
-		totalTaskCount := len(allTasks)
-		if isResuming {
-			// Build task map for ordering from run config.
-			taskMap := make(map[string]*task.Task)
-			for _, t := range allTasks {
-				taskMap[string(t.Language)+"/"+t.Slug] = t
-			}
-
-			// Restore original task order from run config.
-			var orderedTasks []*task.Task
-			var missingTasks []string
-			for _, slug := range runCfg.TaskList {
-				if t, ok := taskMap[slug]; ok {
-					orderedTasks = append(orderedTasks, t)
-				} else {
-					missingTasks = append(missingTasks, slug)
-				}
-			}
-			if len(missingTasks) > 0 {
-				logger.Warn("some tasks from original run not found in current build",
-					"missing", missingTasks,
-					"count", len(missingTasks))
-				fmt.Printf(" Warning: %d task(s) from original run not found: %v\n",
-					len(missingTasks), missingTasks)
-			}
-			allTasks = orderedTasks
-
-			// Clean up incomplete task directories.
-			if err := cleanIncompleteTaskDirs(evalOutputDir, completedTasks, allTasks); err != nil {
-				return fmt.Errorf("cleaning incomplete tasks: %w", err)
-			}
-
-			// Filter out completed tasks.
-			for _, t := range allTasks {
-				taskSlug := string(t.Language) + "/" + t.Slug
-				if !completedTasks[taskSlug] {
-					tasksToRun = append(tasksToRun, t)
-				}
-			}
-
-			if len(tasksToRun) == 0 {
-				fmt.Println("\n All tasks already completed. Nothing to resume.")
-				return nil
-			}
-		} else {
-			tasksToRun = allTasks
-			// Save run config for new runs (enables resume).
-			if err := saveRunConfig(evalOutputDir, allTasks); err != nil {
-				return fmt.Errorf("saving run config: %w", err)
-			}
-		}
-
 		// Detect sandbox availability.
 		evalSandboxActive = initSandbox()
 
 		// Protect the tasks/ directory from agent modification during eval.
-		// Agents run with CWD set to their workspace, but some agents have
-		// tools that can read/write arbitrary paths outside the workspace.
 		if restoreFn, err := protectTasksDir(); err != nil {
 			logger.Warn("failed to protect tasks directory", "error", err)
 		} else if restoreFn != nil {
@@ -545,532 +560,700 @@ Examples:
 		// Set up interrupt handler for graceful shutdown.
 		interruptCtx, interruptCancel := setupInterruptHandler()
 		defer interruptCancel()
-		var wasInterrupted bool
 
-		// Print header
-		fmt.Println()
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		if isResuming {
-			fmt.Println(" SANITY HARNESS - Agent Evaluation (RESUMING)")
-		} else {
-			fmt.Println(" SANITY HARNESS - Agent Evaluation")
-		}
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		fmt.Println()
-		fmt.Printf(" Agent:   %s\n", evalAgent)
-		if evalModel != "" {
-			fmt.Printf(" Model:   %s\n", evalModel)
-		}
-		if evalTier != "" {
-			fmt.Printf(" Tier:    %s\n", evalTier)
-		}
-		if evalDifficulty != "" {
-			fmt.Printf(" Difficulty: %s\n", evalDifficulty)
-		}
-		if evalParallel > 1 {
-			fmt.Printf(" Parallel: %d\n", evalParallel)
-		}
-		if evalSandboxActive {
-			fmt.Println(" Sandbox: enabled (bwrap)")
-		}
-		if isResuming {
-			fmt.Printf(" Tasks:   %d remaining of %d total\n", len(tasksToRun), totalTaskCount)
-		} else {
-			fmt.Printf(" Tasks:   %d\n", len(tasksToRun))
-		}
-		fmt.Printf(" Output:  %s\n", evalOutputDir)
-		fmt.Println()
+		if isMultiRun {
+			// Multi-run mode: create umbrella directory and orchestrate runs.
+			var umbrellaDir string
+			if evalOutputDir != "" {
+				umbrellaDir = evalOutputDir
+			} else if len(specs) == 1 {
+				// Single-agent repeat: use normal naming.
+				umbrellaDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", specs[0].Agent, timestamp))
+			} else {
+				umbrellaDir = filepath.Join("eval-results", fmt.Sprintf("multi-%s", timestamp))
+			}
+			if err := os.MkdirAll(umbrellaDir, 0o755); err != nil {
+				return fmt.Errorf("creating umbrella directory: %w", err)
+			}
 
-		// Run tasks
-		results := make([]EvalResult, 0, len(tasksToRun))
-		passed, failed := 0, 0
-		var infraFailedTasks []string // Tasks that failed due to infra issues (excluded from results)
+			writeMultiRunConfig(umbrellaDir, specs, shared, evalRepeat)
 
-		parallel := evalParallel
-		if parallel <= 0 {
-			parallel = 1
+			var allSummaries []runResult
+			for specIdx, spec := range specs {
+				for rep := 1; rep <= evalRepeat; rep++ {
+					if checkInterrupted(interruptCtx) {
+						updateMultiRunState(umbrellaDir, allSummaries, specs, evalRepeat, true)
+						printMultiRunResumeCommand(umbrellaDir)
+						return nil
+					}
+
+					runDir := multiRunSubdir(umbrellaDir, spec, specIdx, rep, evalRepeat)
+					summary, _, err := evalRunSingle(
+						interruptCtx, spec, shared, allTasks, allTasks,
+						runDir, timestamp, r, false, nil, nil, nil, nil,
+					)
+					rr := runResult{spec: spec, repeat: rep, summary: summary}
+					if err != nil {
+						logger.Warn("run failed", "agent", spec.Agent, "repeat", rep, "error", err)
+						rr.err = err
+					}
+					allSummaries = append(allSummaries, rr)
+					updateMultiRunState(umbrellaDir, allSummaries, specs, evalRepeat, false)
+				}
+			}
+
+			// Generate comparison if multiple specs.
+			if len(specs) > 1 {
+				var summaries []EvalSummary
+				for _, rr := range allSummaries {
+					if rr.summary != nil {
+						summaries = append(summaries, *rr.summary)
+					}
+				}
+				if len(summaries) > 1 {
+					comparison := generateComparison(summaries)
+					writeComparisonJSON(umbrellaDir, comparison)
+					writeComparisonMarkdown(umbrellaDir, comparison)
+				}
+			}
+
+			// Generate repeat stats if repeating.
+			if evalRepeat > 1 {
+				writeRepeatStats(umbrellaDir, specs, allSummaries, evalRepeat)
+			}
+
+			fmt.Printf("\n Multi-run results saved to: %s\n\n", umbrellaDir)
+			return nil
 		}
 
-		if parallel == 1 {
-			consecutiveQuotaExhausted := 0
-			for i, t := range tasksToRun {
-				// Check for interrupt before starting next task.
-				if checkInterrupted(interruptCtx) {
+		// Single run — unchanged behavior.
+		spec := specs[0]
+
+		// Create output directory.
+		if evalOutputDir == "" {
+			evalOutputDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", spec.Agent, timestamp))
+		}
+
+		_, _, err = evalRunSingle(
+			interruptCtx, spec, shared, allTasks, allTasks,
+			evalOutputDir, timestamp, r, isResuming,
+			previousResults, completedTasks, prevAttestation, runCfg,
+		)
+		return err
+	},
+}
+
+
+// evalRunSingle executes a single eval run for one agent/model/reasoning combination.
+// It handles output directory creation, task execution, aggregation, and output file writing.
+func evalRunSingle(
+	interruptCtx context.Context,
+	spec RunSpec,
+	shared SharedConfig,
+	allTasks []*task.Task,
+	tasksToRun []*task.Task,
+	outputDir string,
+	timestamp string,
+	r *runner.Runner,
+	isResuming bool,
+	previousResults []EvalResult,
+	completedTasks map[string]bool,
+	prevAttestation *EvalAttestation,
+	runCfg *RunConfig,
+) (*EvalSummary, *EvalAttestation, error) {
+	// Set globals that sub-functions (runTaskWithAgent, runAgentAttempt, etc.) read.
+	evalAgent = spec.Agent
+	evalModel = spec.Model
+	evalReasoning = spec.Reasoning
+	evalUseMCPTools = shared.UseMCPTools
+	evalDisableMCP = shared.DisableMCP
+	evalLegacy = shared.Legacy
+	evalKeepWorkspaces = shared.KeepWorkspaces
+
+	// Create output directory.
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return nil, nil, fmt.Errorf("creating output directory: %w", err)
+	}
+
+	// For resume mode: filter out completed tasks and clean incomplete dirs.
+	totalTaskCount := len(allTasks)
+	if isResuming && runCfg != nil {
+		// Build task map for ordering from run config.
+		taskMap := make(map[string]*task.Task)
+		for _, t := range allTasks {
+			taskMap[string(t.Language)+"/"+t.Slug] = t
+		}
+
+		// Restore original task order from run config.
+		var orderedTasks []*task.Task
+		var missingTasks []string
+		for _, slug := range runCfg.TaskList {
+			if t, ok := taskMap[slug]; ok {
+				orderedTasks = append(orderedTasks, t)
+			} else {
+				missingTasks = append(missingTasks, slug)
+			}
+		}
+		if len(missingTasks) > 0 {
+			logger.Warn("some tasks from original run not found in current build",
+				"missing", missingTasks,
+				"count", len(missingTasks))
+			fmt.Printf(" Warning: %d task(s) from original run not found: %v\n",
+				len(missingTasks), missingTasks)
+		}
+		allTasks = orderedTasks
+
+		// Clean up incomplete task directories.
+		if err := cleanIncompleteTaskDirs(outputDir, completedTasks, allTasks); err != nil {
+			return nil, nil, fmt.Errorf("cleaning incomplete tasks: %w", err)
+		}
+
+		// Filter out completed tasks.
+		tasksToRun = nil
+		for _, t := range allTasks {
+			taskSlug := string(t.Language) + "/" + t.Slug
+			if !completedTasks[taskSlug] {
+				tasksToRun = append(tasksToRun, t)
+			}
+		}
+
+		if len(tasksToRun) == 0 {
+			fmt.Println("\n All tasks already completed. Nothing to resume.")
+			return nil, nil, nil
+		}
+	} else {
+		// Save run config for new runs (enables resume).
+		if err := saveRunConfig(outputDir, allTasks); err != nil {
+			return nil, nil, fmt.Errorf("saving run config: %w", err)
+		}
+	}
+
+	var wasInterrupted bool
+
+	// Print header
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	if isResuming {
+		fmt.Println(" SANITY HARNESS - Agent Evaluation (RESUMING)")
+	} else {
+		fmt.Println(" SANITY HARNESS - Agent Evaluation")
+	}
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+	fmt.Printf(" Agent:   %s\n", spec.Agent)
+	if spec.Model != "" {
+		fmt.Printf(" Model:   %s\n", spec.Model)
+	}
+	if shared.Tier != "" {
+		fmt.Printf(" Tier:    %s\n", shared.Tier)
+	}
+	if shared.Difficulty != "" {
+		fmt.Printf(" Difficulty: %s\n", shared.Difficulty)
+	}
+	if shared.Parallel > 1 {
+		fmt.Printf(" Parallel: %d\n", shared.Parallel)
+	}
+	if evalSandboxActive {
+		fmt.Println(" Sandbox: enabled (bwrap)")
+	}
+	if isResuming {
+		fmt.Printf(" Tasks:   %d remaining of %d total\n", len(tasksToRun), totalTaskCount)
+	} else {
+		fmt.Printf(" Tasks:   %d\n", len(tasksToRun))
+	}
+	fmt.Printf(" Output:  %s\n", outputDir)
+	fmt.Println()
+
+	// Run tasks
+	results := make([]EvalResult, 0, len(tasksToRun))
+	passed, failed := 0, 0
+	var infraFailedTasks []string // Tasks that failed due to infra issues (excluded from results)
+
+	parallel := shared.Parallel
+	if parallel <= 0 {
+		parallel = 1
+	}
+
+	if parallel == 1 {
+		consecutiveQuotaExhausted := 0
+		for i, t := range tasksToRun {
+			// Check for interrupt before starting next task.
+			if checkInterrupted(interruptCtx) {
+				wasInterrupted = true
+				fmt.Println("\n\033[33m⚠ Interrupt received. Saving partial results...\033[0m")
+				break
+			}
+
+			fmt.Println("─────────────────────────────────────────────────────────────")
+			fmt.Printf(" [%d/%d] %s\n", i+1, len(tasksToRun), t.ID())
+			fmt.Println("─────────────────────────────────────────────────────────────")
+
+			result := runTaskWithAgent(interruptCtx, r, t, spec.Agent, spec.Model, outputDir, shared.Timeout)
+
+			// Infra failures are excluded from results so they can be resumed later.
+			if result.InfraFailure {
+				fmt.Printf(" ⚠ INFRA FAILURE — will be skipped (resumable)\n")
+				infraFailedTasks = append(infraFailedTasks, t.ID())
+				// Delete workspace so resume picks it up as incomplete.
+				if result.WorkspaceDir != "" {
+					_ = os.RemoveAll(result.WorkspaceDir)
+				}
+				// Also remove the task output dir (agent.log copy).
+				taskOutputDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
+				_ = os.RemoveAll(taskOutputDir)
+				consecutiveQuotaExhausted++
+				if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
 					wasInterrupted = true
-					fmt.Println("\n\033[33m⚠ Interrupt received. Saving partial results...\033[0m")
+					fmt.Printf("\n\033[33m⚠ Infra/quota failures for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
 					break
 				}
+				fmt.Println()
+				continue
+			}
 
-				fmt.Println("─────────────────────────────────────────────────────────────")
-				fmt.Printf(" [%d/%d] %s\n", i+1, len(tasksToRun), t.ID())
-				fmt.Println("─────────────────────────────────────────────────────────────")
+			results = append(results, result)
 
-				result := runTaskWithAgent(interruptCtx, r, t, evalAgent, evalModel, evalOutputDir, evalTimeout)
+			if result.Passed {
+				fmt.Printf(" ✓ PASSED (%.2fs)\n", result.Duration)
+				passed++
+				consecutiveQuotaExhausted = 0 // Reset counter on success
+			} else {
+				fmt.Printf(" ✗ FAILED (%.2fs)\n", result.Duration)
+				if result.Error != "" {
+					fmt.Printf("   Error: %s\n", result.Error)
+				}
+				failed++
 
-				// Infra failures are excluded from results so they can be resumed later.
-				if result.InfraFailure {
-					fmt.Printf(" ⚠ INFRA FAILURE — will be skipped (resumable)\n")
-					infraFailedTasks = append(infraFailedTasks, t.ID())
-					// Delete workspace so resume picks it up as incomplete.
-					if result.WorkspaceDir != "" {
-						_ = os.RemoveAll(result.WorkspaceDir)
-					}
-					// Also remove the task output dir (agent.log copy).
-					taskOutputDir := filepath.Join(evalOutputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
-					_ = os.RemoveAll(taskOutputDir)
+				// Track consecutive quota exhaustion
+				if result.QuotaExhausted {
 					consecutiveQuotaExhausted++
 					if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
 						wasInterrupted = true
-						fmt.Printf("\n\033[33m⚠ Infra/quota failures for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
+						fmt.Printf("\n\033[33m⚠ Quota exhausted for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
 						break
 					}
-					fmt.Println()
-					continue
+				} else {
+					consecutiveQuotaExhausted = 0 // Reset on non-quota failure
+				}
+			}
+
+			// Clean up workspace unless --keep-workspaces is set
+			if !shared.KeepWorkspaces && result.WorkspaceDir != "" {
+				if err := os.RemoveAll(result.WorkspaceDir); err != nil {
+					logger.Debug("failed to cleanup workspace", "dir", result.WorkspaceDir, "error", err)
+				}
+			}
+
+			fmt.Println()
+		}
+	} else {
+		type job struct {
+			idx int
+			t   *task.Task
+		}
+		type jobResult struct {
+			idx int
+			r   EvalResult
+		}
+
+		jobs := make(chan job)
+		jobResults := make(chan jobResult)
+		stopSending := make(chan struct{})
+
+		var wg sync.WaitGroup
+		for range parallel {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range jobs {
+					res := runTaskWithAgent(interruptCtx, r, j.t, spec.Agent, spec.Model, outputDir, shared.Timeout)
+					jobResults <- jobResult{idx: j.idx, r: res}
+				}
+			}()
+		}
+
+		// Producer goroutine: sends jobs, stops on interrupt.
+		go func() {
+			for i, t := range tasksToRun {
+				select {
+				case <-stopSending:
+					// Interrupt received, stop sending new jobs.
+					close(jobs)
+					wg.Wait()
+					close(jobResults)
+					return
+				case jobs <- job{idx: i, t: t}:
+				}
+			}
+			close(jobs)
+			wg.Wait()
+			close(jobResults)
+		}()
+
+		collected := make([]EvalResult, len(tasksToRun))
+		seen := 0
+		consecutiveQuotaExhausted := 0
+	collectLoop:
+		for jr := range jobResults {
+			seen++
+
+			// Infra failures are excluded from results so they can be resumed later.
+			if jr.r.InfraFailure {
+				fmt.Printf(" [%d/%d] %s ⚠ INFRA FAILURE — will be skipped (resumable)\n", seen, len(tasksToRun), jr.r.Task)
+				infraFailedTasks = append(infraFailedTasks, jr.r.Task)
+				if jr.r.WorkspaceDir != "" {
+					_ = os.RemoveAll(jr.r.WorkspaceDir)
+				}
+				// Remove task output dir (agent.log copy).
+				parts := strings.SplitN(jr.r.Task, "/", 2)
+				if len(parts) == 2 {
+					taskOutputDir := filepath.Join(outputDir, parts[0]+"-"+parts[1])
+					_ = os.RemoveAll(taskOutputDir)
+				}
+				consecutiveQuotaExhausted++
+			} else {
+				collected[jr.idx] = jr.r
+
+				status := "FAILED"
+				if jr.r.Passed {
+					status = "PASSED"
+				}
+				fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(tasksToRun), jr.r.Task, status, jr.r.Duration)
+				if !jr.r.Passed && jr.r.Error != "" {
+					fmt.Printf("   Error: %s\n", jr.r.Error)
 				}
 
-				results = append(results, result)
-
-				if result.Passed {
-					fmt.Printf(" ✓ PASSED (%.2fs)\n", result.Duration)
+				if jr.r.Passed {
 					passed++
 					consecutiveQuotaExhausted = 0 // Reset counter on success
 				} else {
-					fmt.Printf(" ✗ FAILED (%.2fs)\n", result.Duration)
-					if result.Error != "" {
-						fmt.Printf("   Error: %s\n", result.Error)
-					}
 					failed++
-
 					// Track consecutive quota exhaustion
-					if result.QuotaExhausted {
+					if jr.r.QuotaExhausted {
 						consecutiveQuotaExhausted++
-						if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
-							wasInterrupted = true
-							fmt.Printf("\n\033[33m⚠ Quota exhausted for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
-							break
-						}
 					} else {
 						consecutiveQuotaExhausted = 0 // Reset on non-quota failure
 					}
 				}
 
-				// Clean up workspace unless --keep-workspaces is set
-				if !evalKeepWorkspaces && result.WorkspaceDir != "" {
-					if err := os.RemoveAll(result.WorkspaceDir); err != nil {
-						logger.Debug("failed to cleanup workspace", "dir", result.WorkspaceDir, "error", err)
+				if !shared.KeepWorkspaces && jr.r.WorkspaceDir != "" {
+					if err := os.RemoveAll(jr.r.WorkspaceDir); err != nil {
+						logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
 					}
 				}
-
-				fmt.Println()
-			}
-		} else {
-			type job struct {
-				idx int
-				t   *task.Task
-			}
-			type jobResult struct {
-				idx int
-				r   EvalResult
 			}
 
-			jobs := make(chan job)
-			jobResults := make(chan jobResult)
-			stopSending := make(chan struct{})
+			// Check for interrupt after each result.
+			shouldStop := checkInterrupted(interruptCtx)
+			stopReason := "Interrupt received"
 
-			var wg sync.WaitGroup
-			for range parallel {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					for j := range jobs {
-						res := runTaskWithAgent(interruptCtx, r, j.t, evalAgent, evalModel, evalOutputDir, evalTimeout)
-						jobResults <- jobResult{idx: j.idx, r: res}
-					}
-				}()
+			// Also stop if we hit consecutive quota exhaustion threshold
+			if !shouldStop && consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
+				shouldStop = true
+				stopReason = fmt.Sprintf("Quota/infra failures for %d consecutive tasks", consecutiveQuotaExhausted)
 			}
 
-			// Producer goroutine: sends jobs, stops on interrupt.
-			go func() {
-				for i, t := range tasksToRun {
-					select {
-					case <-stopSending:
-						// Interrupt received, stop sending new jobs.
-						close(jobs)
-						wg.Wait()
-						close(jobResults)
-						return
-					case jobs <- job{idx: i, t: t}:
+			if shouldStop {
+				wasInterrupted = true
+				fmt.Printf("\n\033[33m⚠ %s. Waiting for in-flight tasks...\033[0m\n", stopReason)
+				close(stopSending)
+				// Drain remaining results from in-flight tasks.
+				for jr := range jobResults {
+					if jr.r.InfraFailure {
+						infraFailedTasks = append(infraFailedTasks, jr.r.Task)
+						if jr.r.WorkspaceDir != "" {
+							_ = os.RemoveAll(jr.r.WorkspaceDir)
+						}
+						parts := strings.SplitN(jr.r.Task, "/", 2)
+						if len(parts) == 2 {
+							taskOutputDir := filepath.Join(outputDir, parts[0]+"-"+parts[1])
+							_ = os.RemoveAll(taskOutputDir)
+						}
+					} else {
+						collected[jr.idx] = jr.r
+						if jr.r.Passed {
+							passed++
+						} else {
+							failed++
+						}
+						if !shared.KeepWorkspaces && jr.r.WorkspaceDir != "" {
+							_ = os.RemoveAll(jr.r.WorkspaceDir)
+						}
 					}
 				}
-				close(jobs)
-				wg.Wait()
-				close(jobResults)
-			}()
+				break collectLoop
+			}
+		}
+		// Only include results that were actually run (excluding infra failures).
+		for _, r := range collected {
+			if r.Task != "" {
+				results = append(results, r)
+			}
+		}
+	}
 
-			collected := make([]EvalResult, len(tasksToRun))
-			seen := 0
-			consecutiveQuotaExhausted := 0
-		collectLoop:
-			for jr := range jobResults {
-				seen++
-
-				// Infra failures are excluded from results so they can be resumed later.
-				if jr.r.InfraFailure {
-					fmt.Printf(" [%d/%d] %s ⚠ INFRA FAILURE — will be skipped (resumable)\n", seen, len(tasksToRun), jr.r.Task)
-					infraFailedTasks = append(infraFailedTasks, jr.r.Task)
-					if jr.r.WorkspaceDir != "" {
-						_ = os.RemoveAll(jr.r.WorkspaceDir)
-					}
-					// Remove task output dir (agent.log copy).
-					parts := strings.SplitN(jr.r.Task, "/", 2)
-					if len(parts) == 2 {
-						taskOutputDir := filepath.Join(evalOutputDir, parts[0]+"-"+parts[1])
-						_ = os.RemoveAll(taskOutputDir)
-					}
-					consecutiveQuotaExhausted++
+	// If resuming, merge with previous results.
+	if isResuming && len(previousResults) > 0 {
+		// Build a set of task IDs from new results.
+		newResultTasks := make(map[string]bool)
+		for _, r := range results {
+			newResultTasks[r.Task] = true
+		}
+		// Prepend previous results that aren't in the new results.
+		var merged []EvalResult
+		for _, r := range previousResults {
+			if !newResultTasks[r.Task] {
+				merged = append(merged, r)
+				if r.Passed {
+					passed++
 				} else {
-					collected[jr.idx] = jr.r
-
-					status := "FAILED"
-					if jr.r.Passed {
-						status = "PASSED"
-					}
-					fmt.Printf(" [%d/%d] %s %s (%.2fs)\n", seen, len(tasksToRun), jr.r.Task, status, jr.r.Duration)
-					if !jr.r.Passed && jr.r.Error != "" {
-						fmt.Printf("   Error: %s\n", jr.r.Error)
-					}
-
-					if jr.r.Passed {
-						passed++
-						consecutiveQuotaExhausted = 0 // Reset counter on success
-					} else {
-						failed++
-						// Track consecutive quota exhaustion
-						if jr.r.QuotaExhausted {
-							consecutiveQuotaExhausted++
-						} else {
-							consecutiveQuotaExhausted = 0 // Reset on non-quota failure
-						}
-					}
-
-					if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
-						if err := os.RemoveAll(jr.r.WorkspaceDir); err != nil {
-							logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
-						}
-					}
-				}
-
-				// Check for interrupt after each result.
-				shouldStop := checkInterrupted(interruptCtx)
-				stopReason := "Interrupt received"
-
-				// Also stop if we hit consecutive quota exhaustion threshold
-				if !shouldStop && consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
-					shouldStop = true
-					stopReason = fmt.Sprintf("Quota/infra failures for %d consecutive tasks", consecutiveQuotaExhausted)
-				}
-
-				if shouldStop {
-					wasInterrupted = true
-					fmt.Printf("\n\033[33m⚠ %s. Waiting for in-flight tasks...\033[0m\n", stopReason)
-					close(stopSending)
-					// Drain remaining results from in-flight tasks.
-					for jr := range jobResults {
-						if jr.r.InfraFailure {
-							infraFailedTasks = append(infraFailedTasks, jr.r.Task)
-							if jr.r.WorkspaceDir != "" {
-								_ = os.RemoveAll(jr.r.WorkspaceDir)
-							}
-							parts := strings.SplitN(jr.r.Task, "/", 2)
-							if len(parts) == 2 {
-								taskOutputDir := filepath.Join(evalOutputDir, parts[0]+"-"+parts[1])
-								_ = os.RemoveAll(taskOutputDir)
-							}
-						} else {
-							collected[jr.idx] = jr.r
-							if jr.r.Passed {
-								passed++
-							} else {
-								failed++
-							}
-							if !evalKeepWorkspaces && jr.r.WorkspaceDir != "" {
-								_ = os.RemoveAll(jr.r.WorkspaceDir)
-							}
-						}
-					}
-					break collectLoop
-				}
-			}
-			// Only include results that were actually run (excluding infra failures).
-			for _, r := range collected {
-				if r.Task != "" {
-					results = append(results, r)
+					failed++
 				}
 			}
 		}
+		results = append(merged, results...)
+	}
 
-		// If resuming, merge with previous results.
-		if isResuming && len(previousResults) > 0 {
-			// Build a set of task IDs from new results.
-			newResultTasks := make(map[string]bool)
-			for _, r := range results {
-				newResultTasks[r.Task] = true
+	// Sort results to match allTasks order
+	taskOrder := make(map[string]int)
+	for i, t := range allTasks {
+		taskOrder[t.ID()] = i
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return taskOrder[results[i].Task] < taskOrder[results[j].Task]
+	})
+
+	// Recompute status and weighted score for all results.
+	// Previous results loaded from summary.json during resume may lack
+	// these fields (they were never set due to a defer/named-return bug).
+	taskWeights := make(map[string]task.Weight)
+	for _, t := range allTasks {
+		taskWeights[t.ID()] = task.ComputeWeight(t)
+	}
+	for i := range results {
+		r := &results[i]
+		w, ok := taskWeights[r.Task]
+		if ok {
+			r.Weight = w.Base
+		}
+		r.Status = task.DetermineStatus(r.Passed, r.AgentTimedOut, r.Error)
+		r.WeightedScore = task.ScoreResult(r.Passed, r.AgentTimedOut, r.Error, w)
+	}
+
+	// Calculate pass rate
+	total := passed + failed
+	passRate := 0.0
+	if total > 0 {
+		passRate = float64(passed) / float64(total) * 100
+	}
+
+	// Print summary
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println(" EVALUATION SUMMARY")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+	fmt.Printf(" Agent:     %s\n", spec.Agent)
+	if spec.Model != "" {
+		fmt.Printf(" Model:     %s\n", spec.Model)
+	}
+	fmt.Printf(" Passed:    %d\n", passed)
+	fmt.Printf(" Failed:    %d\n", failed)
+	fmt.Printf(" Total:     %d\n", total)
+	fmt.Printf(" Pass Rate: %.1f%%\n", passRate)
+	fmt.Println()
+
+	// Save summary
+	// Aggregate stats
+	byLanguage := make(map[string]EvalAggregate)
+	byTier := make(map[string]EvalAggregate)
+	byDifficulty := make(map[string]EvalAggregate)
+
+	var totalDuration float64
+	var totalAgentTime float64
+	var totalValidateTime float64
+	var totalPromptChars int
+	var totalWeightedScore float64
+	var maxPossibleScore float64
+	var integrityViolations int
+
+	addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
+		agg := m[key]
+		if r.Passed {
+			agg.Passed++
+		} else {
+			agg.Failed++
+		}
+		agg.Total++
+		agg.Duration += r.Duration
+		agg.AgentTime += r.AgentTime
+		agg.ValidateTime += r.ValidateTime
+		m[key] = agg
+	}
+
+	for _, r := range results {
+		totalDuration += r.Duration
+		totalAgentTime += r.AgentTime
+		totalValidateTime += r.ValidateTime
+		totalPromptChars += r.PromptChars
+		totalWeightedScore += r.WeightedScore
+		maxPossibleScore += r.Weight
+
+		// Count by status
+		if r.Status == task.StatusIntegrityViolation {
+			integrityViolations++
+		}
+
+		addAgg(byLanguage, r.Language, r)
+		if r.Tier != "" {
+			addAgg(byTier, r.Tier, r)
+		}
+		if r.Difficulty != "" {
+			addAgg(byDifficulty, r.Difficulty, r)
+		}
+	}
+
+	// Calculate weighted pass rate
+	weightedPassRate := 0.0
+	if maxPossibleScore > 0 {
+		weightedPassRate = totalWeightedScore / maxPossibleScore * 100
+	}
+
+	finalize := func(m map[string]EvalAggregate) map[string]EvalAggregate {
+		for k, v := range m {
+			if v.Total > 0 {
+				v.PassRate = float64(v.Passed) / float64(v.Total) * 100
 			}
-			// Prepend previous results that aren't in the new results.
-			var merged []EvalResult
-			for _, r := range previousResults {
-				if !newResultTasks[r.Task] {
-					merged = append(merged, r)
-					if r.Passed {
-						passed++
-					} else {
-						failed++
-					}
-				}
-			}
-			results = append(merged, results...)
+			m[k] = v
 		}
+		return m
+	}
 
-		// Sort results to match allTasks order
-		taskOrder := make(map[string]int)
-		for i, t := range allTasks {
-			taskOrder[t.ID()] = i
+	// Aggregate quota statistics
+	var quotaAffectedTasks int
+	var totalQuotaRetries int
+	for _, r := range results {
+		if r.QuotaExhausted {
+			quotaAffectedTasks++
 		}
-		sort.Slice(results, func(i, j int) bool {
-			return taskOrder[results[i].Task] < taskOrder[results[j].Task]
-		})
+		totalQuotaRetries += r.QuotaRetries
+	}
 
-		// Recompute status and weighted score for all results.
-		// Previous results loaded from summary.json during resume may lack
-		// these fields (they were never set due to a defer/named-return bug).
-		taskWeights := make(map[string]task.Weight)
-		for _, t := range allTasks {
-			taskWeights[t.ID()] = task.ComputeWeight(t)
-		}
-		for i := range results {
-			r := &results[i]
-			w, ok := taskWeights[r.Task]
-			if ok {
-				r.Weight = w.Base
-			}
-			r.Status = task.DetermineStatus(r.Passed, r.AgentTimedOut, r.Error)
-			r.WeightedScore = task.ScoreResult(r.Passed, r.AgentTimedOut, r.Error, w)
-		}
+	// Default model to "unknown" if not specified
+	model := spec.Model
+	if model == "" {
+		model = "unknown"
+	}
 
-		// Calculate pass rate
-		total := passed + failed
-		passRate := 0.0
-		if total > 0 {
-			passRate = float64(passed) / float64(total) * 100
-		}
+	summary := EvalSummary{
+		Agent:               spec.Agent,
+		Model:               model,
+		Reasoning:           spec.Reasoning,
+		Timestamp:           timestamp,
+		Tier:                shared.Tier,
+		Difficulty:          shared.Difficulty,
+		Parallel:            parallel,
+		Results:             results,
+		Passed:              passed,
+		Failed:              failed,
+		Total:               total,
+		PassRate:            passRate,
+		WeightedScore:       totalWeightedScore,
+		MaxPossibleScore:    maxPossibleScore,
+		WeightedPassRate:    weightedPassRate,
+		IntegrityViolations: integrityViolations,
+		Duration:            totalDuration,
+		AgentTime:           totalAgentTime,
+		ValidateTime:        totalValidateTime,
+		PromptChars:         totalPromptChars,
+		ByLanguage:          finalize(byLanguage),
+		ByTier:              finalize(byTier),
+		ByDifficulty:        finalize(byDifficulty),
+		UseMCPTools:         shared.UseMCPTools,
+		DisableMCP:          shared.DisableMCP,
+		Sandbox:             evalSandboxActive,
+		Legacy:              shared.Legacy,
+		QuotaAffectedTasks:  quotaAffectedTasks,
+		TotalQuotaRetries:   totalQuotaRetries,
+	}
 
-		// Print summary
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		fmt.Println(" EVALUATION SUMMARY")
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	summaryPath := filepath.Join(outputDir, "summary.json")
+	summaryData, _ := json.MarshalIndent(summary, "", "  ")
+	if err := os.WriteFile(summaryPath, summaryData, 0644); err != nil {
+		logger.Warn("failed to save summary", "error", err)
+	} else {
+		fmt.Printf(" Results saved to: %s\n", summaryPath)
+	}
+
+	// Generate attestation for verification
+	loader := task.NewLoader(tasks.FS, tasksDir)
+	var prevTasks map[string]AttestationTask
+	if prevAttestation != nil {
+		prevTasks = prevAttestation.Tasks
+	}
+	// Build set of tasks that were newly run in this session
+	newlyRunTasks := make(map[string]bool)
+	for _, t := range tasksToRun {
+		newlyRunTasks[t.ID()] = true
+	}
+	attestation, err := generateAttestation(
+		spec.Agent, spec.Model, timestamp, totalDuration,
+		results, outputDir, loader, allTasks, newlyRunTasks, prevTasks,
+	)
+	if err != nil {
+		logger.Warn("failed to generate attestation", "error", err)
+	} else {
+		attestationPath := filepath.Join(outputDir, "attestation.json")
+		attestationData, _ := json.MarshalIndent(attestation, "", "  ")
+		if err := os.WriteFile(attestationPath, attestationData, 0644); err != nil {
+			logger.Warn("failed to save attestation", "error", err)
+		} else {
+			fmt.Printf(" Attestation saved to: %s\n", attestationPath)
+		}
+	}
+
+	// Generate human-readable report.md
+	reportMd := generateEvalReport(summary, attestation)
+	reportPath := filepath.Join(outputDir, "report.md")
+	if err := os.WriteFile(reportPath, []byte(reportMd), 0644); err != nil {
+		logger.Warn("failed to save report", "error", err)
+	} else {
+		fmt.Printf(" Report saved to: %s\n", reportPath)
+	}
+
+	// Generate leaderboard submission file
+	submission := generateLeaderboardSubmission(summary, attestation)
+	submissionData, _ := json.MarshalIndent(submission, "", "  ")
+	submissionPath := filepath.Join(outputDir, "submission.json")
+	if err := os.WriteFile(submissionPath, submissionData, 0644); err != nil {
+		logger.Warn("failed to save submission", "error", err)
+	} else {
+		fmt.Printf(" Submission saved to: %s\n", submissionPath)
+	}
+
+	fmt.Println()
+
+	// Report infra failures and provide resume command.
+	if len(infraFailedTasks) > 0 {
+		fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+		fmt.Printf("\033[33m ⚠ %d task(s) skipped due to infrastructure failures:\033[0m\n", len(infraFailedTasks))
+		for _, t := range infraFailedTasks {
+			fmt.Printf("   • %s\n", t)
+		}
 		fmt.Println()
-		fmt.Printf(" Agent:     %s\n", evalAgent)
-		if evalModel != "" {
-			fmt.Printf(" Model:     %s\n", evalModel)
-		}
-		fmt.Printf(" Passed:    %d\n", passed)
-		fmt.Printf(" Failed:    %d\n", failed)
-		fmt.Printf(" Total:     %d\n", total)
-		fmt.Printf(" Pass Rate: %.1f%%\n", passRate)
+		fmt.Println(" These tasks were not counted in the results above.")
+		fmt.Println(" To retry them, run:")
+		fmt.Printf("   ./sanity eval --resume %s\n", outputDir)
+		fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
 		fmt.Println()
+	}
 
-		// Save summary
-		// Aggregate stats
-		byLanguage := make(map[string]EvalAggregate)
-		byTier := make(map[string]EvalAggregate)
-		byDifficulty := make(map[string]EvalAggregate)
+	// If interrupted, print resume command.
+	if wasInterrupted {
+		printResumeCommand(outputDir)
+	}
 
-		var totalDuration float64
-		var totalAgentTime float64
-		var totalValidateTime float64
-		var totalPromptChars int
-		var totalWeightedScore float64
-		var maxPossibleScore float64
-		var integrityViolations int
+	return &summary, attestation, nil
 
-		addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
-			agg := m[key]
-			if r.Passed {
-				agg.Passed++
-			} else {
-				agg.Failed++
-			}
-			agg.Total++
-			agg.Duration += r.Duration
-			agg.AgentTime += r.AgentTime
-			agg.ValidateTime += r.ValidateTime
-			m[key] = agg
-		}
-
-		for _, r := range results {
-			totalDuration += r.Duration
-			totalAgentTime += r.AgentTime
-			totalValidateTime += r.ValidateTime
-			totalPromptChars += r.PromptChars
-			totalWeightedScore += r.WeightedScore
-			maxPossibleScore += r.Weight
-
-			// Count by status
-			if r.Status == task.StatusIntegrityViolation {
-				integrityViolations++
-			}
-
-			addAgg(byLanguage, r.Language, r)
-			if r.Tier != "" {
-				addAgg(byTier, r.Tier, r)
-			}
-			if r.Difficulty != "" {
-				addAgg(byDifficulty, r.Difficulty, r)
-			}
-		}
-
-		// Calculate weighted pass rate
-		weightedPassRate := 0.0
-		if maxPossibleScore > 0 {
-			weightedPassRate = totalWeightedScore / maxPossibleScore * 100
-		}
-
-		finalize := func(m map[string]EvalAggregate) map[string]EvalAggregate {
-			for k, v := range m {
-				if v.Total > 0 {
-					v.PassRate = float64(v.Passed) / float64(v.Total) * 100
-				}
-				m[k] = v
-			}
-			return m
-		}
-
-		// Aggregate quota statistics
-		var quotaAffectedTasks int
-		var totalQuotaRetries int
-		for _, r := range results {
-			if r.QuotaExhausted {
-				quotaAffectedTasks++
-			}
-			totalQuotaRetries += r.QuotaRetries
-		}
-
-		// Default model to "unknown" if not specified
-		model := evalModel
-		if model == "" {
-			model = "unknown"
-		}
-
-		summary := EvalSummary{
-			Agent:               evalAgent,
-			Model:               model,
-			Reasoning:           evalReasoning,
-			Timestamp:           timestamp,
-			Tier:                evalTier,
-			Difficulty:          evalDifficulty,
-			Parallel:            parallel,
-			Results:             results,
-			Passed:              passed,
-			Failed:              failed,
-			Total:               total,
-			PassRate:            passRate,
-			WeightedScore:       totalWeightedScore,
-			MaxPossibleScore:    maxPossibleScore,
-			WeightedPassRate:    weightedPassRate,
-			IntegrityViolations: integrityViolations,
-			Duration:            totalDuration,
-			AgentTime:           totalAgentTime,
-			ValidateTime:        totalValidateTime,
-			PromptChars:         totalPromptChars,
-			ByLanguage:          finalize(byLanguage),
-			ByTier:              finalize(byTier),
-			ByDifficulty:        finalize(byDifficulty),
-			UseMCPTools:         evalUseMCPTools,
-			DisableMCP:          evalDisableMCP,
-			Sandbox:             evalSandboxActive,
-			Legacy:              evalLegacy,
-			QuotaAffectedTasks:  quotaAffectedTasks,
-			TotalQuotaRetries:   totalQuotaRetries,
-		}
-
-		summaryPath := filepath.Join(evalOutputDir, "summary.json")
-		summaryData, _ := json.MarshalIndent(summary, "", "  ")
-		if err := os.WriteFile(summaryPath, summaryData, 0644); err != nil {
-			logger.Warn("failed to save summary", "error", err)
-		} else {
-			fmt.Printf(" Results saved to: %s\n", summaryPath)
-		}
-
-		// Generate attestation for verification
-		loader := task.NewLoader(tasks.FS, tasksDir)
-		var prevTasks map[string]AttestationTask
-		if prevAttestation != nil {
-			prevTasks = prevAttestation.Tasks
-		}
-		// Build set of tasks that were newly run in this session
-		newlyRunTasks := make(map[string]bool)
-		for _, t := range tasksToRun {
-			newlyRunTasks[t.ID()] = true
-		}
-		attestation, err := generateAttestation(
-			evalAgent, evalModel, timestamp, totalDuration,
-			results, evalOutputDir, loader, allTasks, newlyRunTasks, prevTasks,
-		)
-		if err != nil {
-			logger.Warn("failed to generate attestation", "error", err)
-		} else {
-			attestationPath := filepath.Join(evalOutputDir, "attestation.json")
-			attestationData, _ := json.MarshalIndent(attestation, "", "  ")
-			if err := os.WriteFile(attestationPath, attestationData, 0644); err != nil {
-				logger.Warn("failed to save attestation", "error", err)
-			} else {
-				fmt.Printf(" Attestation saved to: %s\n", attestationPath)
-			}
-		}
-
-		// Generate human-readable report.md
-		reportMd := generateEvalReport(summary, attestation)
-		reportPath := filepath.Join(evalOutputDir, "report.md")
-		if err := os.WriteFile(reportPath, []byte(reportMd), 0644); err != nil {
-			logger.Warn("failed to save report", "error", err)
-		} else {
-			fmt.Printf(" Report saved to: %s\n", reportPath)
-		}
-
-		// Generate leaderboard submission file
-		submission := generateLeaderboardSubmission(summary, attestation)
-		submissionData, _ := json.MarshalIndent(submission, "", "  ")
-		submissionPath := filepath.Join(evalOutputDir, "submission.json")
-		if err := os.WriteFile(submissionPath, submissionData, 0644); err != nil {
-			logger.Warn("failed to save submission", "error", err)
-		} else {
-			fmt.Printf(" Submission saved to: %s\n", submissionPath)
-		}
-
-		fmt.Println()
-
-		// Report infra failures and provide resume command.
-		if len(infraFailedTasks) > 0 {
-			fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-			fmt.Printf("\033[33m ⚠ %d task(s) skipped due to infrastructure failures:\033[0m\n", len(infraFailedTasks))
-			for _, t := range infraFailedTasks {
-				fmt.Printf("   • %s\n", t)
-			}
-			fmt.Println()
-			fmt.Println(" These tasks were not counted in the results above.")
-			fmt.Println(" To retry them, run:")
-			fmt.Printf("   ./sanity eval --resume %s\n", evalOutputDir)
-			fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-			fmt.Println()
-		}
-
-		// If interrupted, print resume command.
-		if wasInterrupted {
-			printResumeCommand(evalOutputDir)
-		}
-
-		return nil
-	},
 }
 
 func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) (result EvalResult) {
@@ -2757,4 +2940,5 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalNoSandbox, "no-sandbox", false, "disable bubblewrap sandbox for agent processes")
 	evalCmd.Flags().BoolVar(&evalLegacy, "legacy", false, "expose hidden tests to agent during workspace init (pre-v1.6.0 behavior)")
 	evalCmd.Flags().StringVar(&evalResume, "resume", "", "resume eval from existing output directory")
+	evalCmd.Flags().IntVar(&evalRepeat, "repeat", 1, "repeat each configuration N times for statistical analysis")
 }
