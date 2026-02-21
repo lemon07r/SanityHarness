@@ -1107,16 +1107,16 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 		return result
 	}
 
-	// Build agent command
-	prompt := buildAgentPrompt(t, evalUseMCPTools)
-	result.PromptChars = utf8.RuneCountInString(prompt)
-
 	// Get agent configuration
 	agentCfg := cfg.GetAgent(agent)
 	if agentCfg == nil {
 		result.Error = fmt.Sprintf("unknown agent: %s", agent)
 		return result
 	}
+
+	// Build agent command
+	prompt := buildAgentPrompt(t, evalUseMCPTools, agentCfg.MCPPrompt)
+	result.PromptChars = utf8.RuneCountInString(prompt)
 
 	agentTimeout := time.Duration(timeout) * time.Second
 	if agentTimeout <= 0 {
@@ -1453,7 +1453,7 @@ func toolchainInfo(lang task.Language) string {
 	}
 }
 
-func buildAgentPrompt(t *task.Task, useMCPTools bool) string {
+func buildAgentPrompt(t *task.Task, useMCPTools bool, mcpPrompt string) string {
 	stubFiles := make([]string, 0, len(t.Files.Stub))
 	for _, f := range t.Files.Stub {
 		stubFiles = append(stubFiles, task.StripTxtExtension(f))
@@ -1506,13 +1506,10 @@ RULES:
 		prompt += `
 
 MCP TOOLS:
-You have access to MCP (Model Context Protocol) tools. Use them proactively:
-- Use file reading tools to examine stub files and test files thoroughly
-- Use code search tools to find patterns, helper functions, or related implementations
-- Use any available analysis tools to understand the codebase structure
-- Prefer using tools to gather context over making assumptions
-
-Do NOT guess at implementation details that tools can help you discover.`
+You have access to MCP tools. Carefully assess what they do and how they can be used as effectively as possible, then use them as proactively as you can wherever and whenever most suitable.`
+		if mcpPrompt != "" {
+			prompt += "\n\nAGENT-SPECIFIC TOOLS:\n" + mcpPrompt
+		}
 	}
 
 	return prompt

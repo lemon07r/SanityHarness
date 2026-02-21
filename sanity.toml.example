@@ -63,3 +63,9 @@ auto_pull = true            # automatically pull images if missing
 # [agents.special-agent]
 # command = "special"
 # args = ["run", "{prompt}", "--verbose", "--no-confirm"]
+#
+# Example: Agent with custom MCP tool guidance (appended when --use-mcp-tools is set)
+# [agents.gemini]
+# command = "gemini"
+# args = ["--yolo", "{prompt}"]
+# mcp_prompt = "Use @web search to look up API docs when uncertain."

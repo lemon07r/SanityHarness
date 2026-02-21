@@ -20,6 +20,7 @@ type AgentConfig struct {
 	ReasoningFlagPosition string            `toml:"reasoning_flag_position"` // "before" or "after" {prompt} in args (default: "before")
 	Env                   map[string]string `toml:"env"`                     // Environment variables
 	DefaultTimeout        int               `toml:"default_timeout"`         // Per-agent minimum timeout in seconds (overrides harness default if larger)
+	MCPPrompt             string            `toml:"mcp_prompt,omitempty"`    // Agent-specific MCP tool guidance (appended when --use-mcp-tools is set)
 }
 
 // DefaultAgents provides built-in configurations for popular coding agents.

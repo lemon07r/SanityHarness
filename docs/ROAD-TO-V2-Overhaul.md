@@ -64,6 +64,12 @@ Tasks updated in this pass:
 
 The intent here was high-signal evaluation: remove "mind-reading" requirements, but do not turn tasks into copy-paste exercises.
 
+## What changed in MCP tools mode
+
+The `--use-mcp-tools` prompt was rewritten to be minimal and neutral. The previous prompt included workflow coaching (read files, search code, don't guess) that could inflate scores independent of actual MCP tool usage. The new prompt is a single sentence nudging the agent to use its MCP tools proactively, without teaching problem-solving strategy. This makes with-vs-without comparisons fairer.
+
+A new `mcp_prompt` config field was added to `AgentConfig`, allowing per-agent MCP tool guidance (e.g., telling Gemini to use `@web` search). This is appended under an `AGENT-SPECIFIC TOOLS:` header when `--use-mcp-tools` is set.
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:
