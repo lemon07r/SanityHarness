@@ -86,6 +86,58 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	}
 }
 
+func TestBuildAgentPromptIncludesToolchainInfo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		lang task.Language
+		want string
+	}{
+		{
+			name: "go toolchain mapping",
+			lang: task.Go,
+			want: "Go 1.25",
+		},
+		{
+			name: "zig toolchain mapping",
+			lang: task.Zig,
+			want: "Zig 0.13.0",
+		},
+		{
+			name: "unknown language fallback",
+			lang: task.Language("customlang"),
+			want: "customlang",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tt := &task.Task{
+				Slug:        "demo",
+				Name:        "Demo Task",
+				Language:    tc.lang,
+				Tier:        "core",
+				Difficulty:  "hard",
+				Description: "Implement the thing.",
+				Files: task.TaskFiles{
+					Stub: []string{"demo.go.txt"},
+					Test: []string{"demo_test.go.txt"},
+				},
+			}
+
+			prompt := buildAgentPrompt(tt, false)
+			wantLine := "- Toolchain: " + tc.want
+			if !strings.Contains(prompt, wantLine) {
+				t.Fatalf("prompt missing %q\n\nPrompt:\n%s", wantLine, prompt)
+			}
+		})
+	}
+}
+
 func TestBuildAgentCommandDisableMCP(t *testing.T) {
 	t.Parallel()
 

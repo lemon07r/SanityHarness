@@ -1415,6 +1415,26 @@ func openAgentLogFile(agentLogPath string, attempt int) *os.File {
 	return logFile
 }
 
+// toolchainInfo returns a human-readable toolchain description for the given language.
+func toolchainInfo(lang task.Language) string {
+	switch lang {
+	case task.Go:
+		return "Go 1.25"
+	case task.Rust:
+		return "Rust 1.83 (stable)"
+	case task.Zig:
+		return "Zig 0.13.0"
+	case task.Dart:
+		return "Dart 3.3 SDK"
+	case task.TypeScript:
+		return "Node.js 20 with TypeScript (tsx)"
+	case task.Kotlin:
+		return "Kotlin (JDK 21, Gradle 8.5)"
+	default:
+		return string(lang)
+	}
+}
+
 func buildAgentPrompt(t *task.Task, useMCPTools bool) string {
 	stubFiles := make([]string, 0, len(t.Files.Stub))
 	for _, f := range t.Files.Stub {
@@ -1438,7 +1458,8 @@ FILES TO READ:
 - Test files:          %s
 
 ENVIRONMENT:
-- Tests run automatically in a Docker container with a %s toolchain pre-installed.
+- Tests run automatically in a Docker container.
+- Toolchain: %s
 - You do NOT need to run tests yourself.
 - Do NOT search for or install language toolchains/SDKs.
 
@@ -1460,7 +1481,7 @@ RULES:
 - Do NOT navigate to parent directories or read files outside the workspace.`,
 		t.Name, t.Language, t.Tier, t.Difficulty, t.Description,
 		strings.Join(stubFiles, ", "), strings.Join(testFiles, ", "),
-		t.Language)
+		toolchainInfo(t.Language))
 
 	// Append MCP tools section if enabled
 	if useMCPTools {
