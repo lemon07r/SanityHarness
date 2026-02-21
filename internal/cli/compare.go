@@ -41,7 +41,7 @@ Supports glob patterns for convenient selection of multiple directories.`,
 		}
 
 		// Always write to stdout.
-		writeComparisonReport(os.Stdout, comparison)
+		fmt.Print(buildComparisonReport(comparison))
 		return nil
 	},
 }

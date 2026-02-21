@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -180,33 +179,32 @@ func updateMultiRunState(umbrellaDir string, results []runResult, specs []RunSpe
 
 	// If interrupted, mark the last non-completed run as interrupted.
 	if interrupted {
-		for i := len(state.Runs) - 1; i >= 0; i-- {
-			if state.Runs[i].Status == "pending" {
-				// Find the first pending — the one before it might be interrupted.
-				break
-			}
-		}
-		// Mark the last completed as interrupted if it had an error or was partial.
-		for i := range state.Runs {
-			if state.Runs[i].Status == "pending" && i > 0 {
-				// The run just before the first pending might be the interrupted one.
-				if i > 0 && state.Runs[i-1].Status == "completed" {
-					// Check if it was actually interrupted.
-					for _, rr := range results {
-						if rr.spec.Agent == specs[state.Runs[i-1].SpecIndex].Agent &&
-							rr.repeat == state.Runs[i-1].Repeat &&
-							rr.err != nil {
-							state.Runs[i-1].Status = "interrupted"
-						}
-					}
-				}
-				break
-			}
-		}
+		markInterruptedRun(state.Runs, specs, results)
 	}
 
 	data, _ := json.MarshalIndent(state, "", "  ")
 	_ = os.WriteFile(filepath.Join(umbrellaDir, "multi-run-state.json"), data, 0o644)
+}
+
+// markInterruptedRun finds the run just before the first pending one and marks it
+// as interrupted if the corresponding result had an error.
+func markInterruptedRun(runs []MultiRunItem, specs []RunSpec, results []runResult) {
+	for i := range runs {
+		if runs[i].Status != "pending" || i == 0 {
+			continue
+		}
+		if runs[i-1].Status != "completed" {
+			break
+		}
+		for _, rr := range results {
+			if rr.spec.Agent == specs[runs[i-1].SpecIndex].Agent &&
+				rr.repeat == runs[i-1].Repeat &&
+				rr.err != nil {
+				runs[i-1].Status = "interrupted"
+			}
+		}
+		break
+	}
 }
 
 // isMultiRunDir checks if a directory is a multi-run umbrella directory.
@@ -239,17 +237,7 @@ func resumeMultiRun(resumeDir string) error {
 
 	// Restore shared config globals for runner creation.
 	shared := mrCfg.Shared
-	evalTier = shared.Tier
-	evalDifficulty = shared.Difficulty
-	evalLang = shared.Lang
-	evalTasks = shared.Tasks
-	evalTimeout = shared.Timeout
-	evalParallel = shared.Parallel
-	evalKeepWorkspaces = shared.KeepWorkspaces
-	evalUseMCPTools = shared.UseMCPTools
-	evalDisableMCP = shared.DisableMCP
-	evalNoSandbox = shared.NoSandbox
-	evalLegacy = shared.Legacy
+	restoreSharedConfigGlobals(shared)
 
 	// Create runner.
 	r, err := newRunnerFromConfig()
@@ -312,36 +300,60 @@ func resumeMultiRun(resumeDir string) error {
 		runDir := filepath.Join(resumeDir, item.Dir)
 
 		// For interrupted runs, use single-run resume logic.
-		var isResuming bool
-		var previousResults []EvalResult
-		var completedTasks map[string]bool
-		var prevAttestation *EvalAttestation
-		var runCfg *RunConfig
-
-		if item.Status == "interrupted" {
-			runCfg, err = loadRunConfig(runDir)
-			if err == nil {
-				isResuming = true
-				completedTasks, _ = findCompletedTasks(runDir)
-				prevSummary, _ := loadPreviousSummary(runDir)
-				if prevSummary != nil {
-					previousResults = prevSummary.Results
-				}
-				prevAttestation, _ = loadPreviousAttestation(runDir)
-			}
-		}
+		resumeState := prepareInterruptedResume(item, runDir)
 
 		summary, _, runErr := evalRunSingle(
 			interruptCtx, spec, shared, allTasks, allTasks,
-			runDir, timestamp, r, isResuming,
-			previousResults, completedTasks, prevAttestation, runCfg,
+			runDir, timestamp, r, resumeState.isResuming,
+			resumeState.previousResults, resumeState.completedTasks,
+			resumeState.prevAttestation, resumeState.runCfg,
 		)
 		rr := runResult{spec: spec, repeat: item.Repeat, summary: summary, err: runErr}
 		allSummaries = append(allSummaries, rr)
 		updateMultiRunState(resumeDir, allSummaries, mrCfg.Specs, mrCfg.Repeat, false)
 	}
 
-	// Regenerate comparison and repeat stats.
+	writeMultiRunOutputs(resumeDir, mrCfg, allSummaries)
+
+	fmt.Printf("\n Multi-run results saved to: %s\n\n", resumeDir)
+	return nil
+}
+
+// interruptedResumeState holds the state needed to resume an interrupted single run.
+type interruptedResumeState struct {
+	isResuming      bool
+	previousResults []EvalResult
+	completedTasks  map[string]bool
+	prevAttestation *EvalAttestation
+	runCfg          *RunConfig
+}
+
+// prepareInterruptedResume loads resume state for an interrupted multi-run item.
+func prepareInterruptedResume(item MultiRunItem, runDir string) interruptedResumeState {
+	if item.Status != "interrupted" {
+		return interruptedResumeState{}
+	}
+	runCfg, err := loadRunConfig(runDir)
+	if err != nil {
+		return interruptedResumeState{}
+	}
+	completedTasks, _ := findCompletedTasks(runDir)
+	var previousResults []EvalResult
+	if prevSummary, _ := loadPreviousSummary(runDir); prevSummary != nil {
+		previousResults = prevSummary.Results
+	}
+	prevAttestation, _ := loadPreviousAttestation(runDir)
+	return interruptedResumeState{
+		isResuming:      true,
+		previousResults: previousResults,
+		completedTasks:  completedTasks,
+		prevAttestation: prevAttestation,
+		runCfg:          runCfg,
+	}
+}
+
+// writeMultiRunOutputs regenerates comparison and repeat stats for a multi-run session.
+func writeMultiRunOutputs(dir string, mrCfg MultiRunConfig, allSummaries []runResult) {
 	if len(mrCfg.Specs) > 1 {
 		var summaries []EvalSummary
 		for _, rr := range allSummaries {
@@ -351,16 +363,29 @@ func resumeMultiRun(resumeDir string) error {
 		}
 		if len(summaries) > 1 {
 			comparison := generateComparison(summaries)
-			writeComparisonJSON(resumeDir, comparison)
-			writeComparisonMarkdown(resumeDir, comparison)
+			writeComparisonJSON(dir, comparison)
+			writeComparisonMarkdown(dir, comparison)
 		}
 	}
 	if mrCfg.Repeat > 1 {
-		writeRepeatStats(resumeDir, mrCfg.Specs, allSummaries, mrCfg.Repeat)
+		writeRepeatStats(dir, mrCfg.Specs, allSummaries, mrCfg.Repeat)
 	}
+}
 
-	fmt.Printf("\n Multi-run results saved to: %s\n\n", resumeDir)
-	return nil
+// restoreSharedConfigGlobals sets the global eval flags from a SharedConfig,
+// used when resuming a multi-run session.
+func restoreSharedConfigGlobals(shared SharedConfig) {
+	evalTier = shared.Tier
+	evalDifficulty = shared.Difficulty
+	evalLang = shared.Lang
+	evalTasks = shared.Tasks
+	evalTimeout = shared.Timeout
+	evalParallel = shared.Parallel
+	evalKeepWorkspaces = shared.KeepWorkspaces
+	evalUseMCPTools = shared.UseMCPTools
+	evalDisableMCP = shared.DisableMCP
+	evalNoSandbox = shared.NoSandbox
+	evalLegacy = shared.Legacy
 }
 
 // printMultiRunResumeCommand prints the command to resume a multi-run session.
@@ -429,66 +454,66 @@ func writeComparisonJSON(dir string, c Comparison) {
 
 // writeComparisonMarkdown writes comparison-report.md to the umbrella directory.
 func writeComparisonMarkdown(dir string, c Comparison) {
-	f, err := os.Create(filepath.Join(dir, "comparison-report.md"))
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	writeComparisonReport(f, c)
+	report := buildComparisonReport(c)
+	_ = os.WriteFile(filepath.Join(dir, "comparison-report.md"), []byte(report), 0o644)
 }
 
-// writeComparisonReport writes a human-readable comparison report.
-func writeComparisonReport(w io.Writer, c Comparison) {
-	fmt.Fprintf(w, "### Agent Comparison\n\n")
+// buildComparisonReport builds a human-readable comparison report as a string.
+func buildComparisonReport(c Comparison) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "### Agent Comparison\n\n")
 
 	// Summary table.
-	fmt.Fprintf(w, "| Agent | Model | Pass Rate | Weighted Score | Passed | Failed | Duration |\n")
-	fmt.Fprintf(w, "|-------|-------|-----------|----------------|--------|--------|----------|\n")
+	fmt.Fprintf(&sb, "| Agent | Model | Pass Rate | Weighted Score | Passed | Failed | Duration |\n")
+	fmt.Fprintf(&sb, "|-------|-------|-----------|----------------|--------|--------|----------|\n")
 	for _, r := range c.Runs {
 		dur := formatDuration(r.Duration)
 		best := ""
 		if r.ID == c.BestRun {
 			best = " 🏆"
 		}
-		fmt.Fprintf(w, "| %s%s | %s | %.1f%% | %.2f | %d | %d | %s |\n",
+		fmt.Fprintf(&sb, "| %s%s | %s | %.1f%% | %.2f | %d | %d | %s |\n",
 			r.Agent, best, r.Model, r.PassRate, r.WeightedScore, r.Passed, r.Failed, dur)
 	}
-	fmt.Fprintln(w)
+	sb.WriteString("\n")
 
 	// Task matrix.
 	if len(c.TaskMatrix) > 0 && len(c.Runs) > 0 {
-		fmt.Fprintf(w, "### Task Matrix\n\n")
-		fmt.Fprintf(w, "| Task |")
+		fmt.Fprintf(&sb, "### Task Matrix\n\n")
+		fmt.Fprintf(&sb, "| Task |")
 		for _, r := range c.Runs {
-			fmt.Fprintf(w, " %s |", r.ID)
+			fmt.Fprintf(&sb, " %s |", r.ID)
 		}
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "|------|")
+		sb.WriteString("\n")
+		fmt.Fprintf(&sb, "|------|")
 		for range c.Runs {
-			fmt.Fprintf(w, "------|")
+			fmt.Fprintf(&sb, "------|")
 		}
-		fmt.Fprintln(w)
+		sb.WriteString("\n")
 
 		// Sort tasks for deterministic output.
-		var tasks []string
+		tasks := make([]string, 0, len(c.TaskMatrix))
 		for t := range c.TaskMatrix {
 			tasks = append(tasks, t)
 		}
 		sort.Strings(tasks)
 
 		for _, t := range tasks {
-			fmt.Fprintf(w, "| %s |", t)
+			fmt.Fprintf(&sb, "| %s |", t)
 			for _, r := range c.Runs {
 				status := c.TaskMatrix[t][r.ID]
 				if status == "" {
 					status = "—"
 				}
-				fmt.Fprintf(w, " %s |", status)
+				fmt.Fprintf(&sb, " %s |", status)
 			}
-			fmt.Fprintln(w)
+			sb.WriteString("\n")
 		}
-		fmt.Fprintln(w)
+		sb.WriteString("\n")
 	}
+
+	return sb.String()
 }
 
 // writeRepeatStats computes and writes repeat statistics for each config.
@@ -514,38 +539,40 @@ func writeRepeatStats(umbrellaDir string, specs []RunSpec, results []runResult, 
 	_ = os.WriteFile(filepath.Join(umbrellaDir, "repeat-stats.json"), data, 0o644)
 
 	// Write Markdown.
-	f, err := os.Create(filepath.Join(umbrellaDir, "repeat-report.md"))
-	if err != nil {
-		return
-	}
-	defer f.Close()
+	report := buildRepeatReport(allStats)
+	_ = os.WriteFile(filepath.Join(umbrellaDir, "repeat-report.md"), []byte(report), 0o644)
+}
+
+// buildRepeatReport builds a human-readable repeat statistics report as a string.
+func buildRepeatReport(allStats []RepeatStats) string {
+	var sb strings.Builder
 
 	for _, stats := range allStats {
 		label := stats.Config.Agent
 		if stats.Config.Model != "" {
 			label += " / " + stats.Config.Model
 		}
-		fmt.Fprintf(f, "### Repeat Analysis — %s (%d runs)\n\n", label, stats.Runs)
-		fmt.Fprintf(f, "| Metric | Mean | Std Dev | Min | Max |\n")
-		fmt.Fprintf(f, "|--------|------|---------|-----|-----|\n")
-		fmt.Fprintf(f, "| Pass Rate | %.1f%% | ±%.1f%% | %.1f%% | %.1f%% |\n",
+		fmt.Fprintf(&sb, "### Repeat Analysis — %s (%d runs)\n\n", label, stats.Runs)
+		fmt.Fprintf(&sb, "| Metric | Mean | Std Dev | Min | Max |\n")
+		fmt.Fprintf(&sb, "|--------|------|---------|-----|-----|\n")
+		fmt.Fprintf(&sb, "| Pass Rate | %.1f%% | ±%.1f%% | %.1f%% | %.1f%% |\n",
 			stats.MeanPassRate, stats.StdDevPassRate, stats.MinPassRate, stats.MaxPassRate)
-		fmt.Fprintf(f, "| Weighted Score | %.2f | ±%.2f | %.2f | %.2f |\n",
+		fmt.Fprintf(&sb, "| Weighted Score | %.2f | ±%.2f | %.2f | %.2f |\n",
 			stats.MeanWeightedScore, stats.StdDevWeightedScore, stats.MinWeightedScore, stats.MaxWeightedScore)
-		fmt.Fprintf(f, "| Duration | %s | — | — | — |\n", formatDuration(stats.MeanDuration))
-		fmt.Fprintln(f)
+		fmt.Fprintf(&sb, "| Duration | %s | — | — | — |\n", formatDuration(stats.MeanDuration))
+		sb.WriteString("\n")
 
 		// Task consistency sorted by flakiness.
 		if len(stats.TaskConsistency) > 0 {
-			fmt.Fprintf(f, "### Task Consistency (sorted by flakiness)\n\n")
-			fmt.Fprintf(f, "| Task | Pass Rate | Status |\n")
-			fmt.Fprintf(f, "|------|-----------|--------|\n")
+			fmt.Fprintf(&sb, "### Task Consistency (sorted by flakiness)\n\n")
+			fmt.Fprintf(&sb, "| Task | Pass Rate | Status |\n")
+			fmt.Fprintf(&sb, "|------|-----------|--------|\n")
 
 			type taskRate struct {
 				task string
 				rate float64
 			}
-			var sorted []taskRate
+			sorted := make([]taskRate, 0, len(stats.TaskConsistency))
 			for t, rate := range stats.TaskConsistency {
 				sorted = append(sorted, taskRate{t, rate})
 			}
@@ -560,16 +587,20 @@ func writeRepeatStats(umbrellaDir string, specs []RunSpec, results []runResult, 
 				} else if tr.rate < 100 {
 					status = "⚠️ Flaky"
 				}
-				fmt.Fprintf(f, "| %s | %.0f%% | %s |\n", tr.task, tr.rate, status)
+				fmt.Fprintf(&sb, "| %s | %.0f%% | %s |\n", tr.task, tr.rate, status)
 			}
-			fmt.Fprintln(f)
+			sb.WriteString("\n")
 		}
 	}
+
+	return sb.String()
 }
 
 // computeRepeatStats computes statistical aggregation across repeated runs.
 func computeRepeatStats(spec RunSpec, summaries []*EvalSummary) RepeatStats {
-	var passRates, weightedScores, durations []float64
+	passRates := make([]float64, 0, len(summaries))
+	weightedScores := make([]float64, 0, len(summaries))
+	durations := make([]float64, 0, len(summaries))
 	taskPassCounts := make(map[string]int)
 	taskTotal := make(map[string]int)
 
@@ -612,67 +643,85 @@ func filterTasksForShared(allTasks []*task.Task, shared SharedConfig) []*task.Ta
 	result := allTasks
 
 	if shared.Tasks != "" {
-		tokens := strings.Split(shared.Tasks, ",")
-		var selected []*task.Task
-		seen := make(map[string]bool)
-		for _, tok := range tokens {
-			tok = strings.TrimSpace(tok)
-			if tok == "" {
-				continue
-			}
-			t, err := task.ResolveRef(result, tok)
-			if err != nil {
-				continue
-			}
-			if !seen[t.ID()] {
-				seen[t.ID()] = true
-				selected = append(selected, t)
-			}
-		}
-		result = selected
+		result = filterByTaskRefs(result, shared.Tasks)
 	}
-
 	if shared.Lang != "" {
-		lang, err := task.ParseLanguage(shared.Lang)
-		if err == nil {
-			var filtered []*task.Task
-			for _, t := range result {
-				if t.Language == lang {
-					filtered = append(filtered, t)
-				}
-			}
-			result = filtered
-		}
+		result = filterByLanguage(result, shared.Lang)
 	}
-
 	if shared.Difficulty != "" {
-		want := make(map[string]bool)
-		for _, tok := range strings.Split(shared.Difficulty, ",") {
-			tok = strings.TrimSpace(tok)
-			if tok != "" {
-				want[tok] = true
-			}
-		}
-		var filtered []*task.Task
-		for _, t := range result {
-			if want[t.Difficulty] {
-				filtered = append(filtered, t)
-			}
-		}
-		result = filtered
+		result = filterByDifficulty(result, shared.Difficulty)
 	}
-
 	if shared.Tier != "" && shared.Tier != "all" {
-		var filtered []*task.Task
-		for _, t := range result {
-			if t.Tier == shared.Tier {
-				filtered = append(filtered, t)
-			}
-		}
-		result = filtered
+		result = filterByTier(result, shared.Tier)
 	}
 
 	return result
+}
+
+// filterByTaskRefs selects tasks matching comma-separated task references.
+func filterByTaskRefs(tasks []*task.Task, refs string) []*task.Task {
+	tokens := strings.Split(refs, ",")
+	var selected []*task.Task
+	seen := make(map[string]bool)
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		t, err := task.ResolveRef(tasks, tok)
+		if err != nil {
+			continue
+		}
+		if !seen[t.ID()] {
+			seen[t.ID()] = true
+			selected = append(selected, t)
+		}
+	}
+	return selected
+}
+
+// filterByLanguage filters tasks to those matching the given language string.
+func filterByLanguage(tasks []*task.Task, langStr string) []*task.Task {
+	lang, err := task.ParseLanguage(langStr)
+	if err != nil {
+		return tasks
+	}
+	var filtered []*task.Task
+	for _, t := range tasks {
+		if t.Language == lang {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+// filterByDifficulty filters tasks to those matching comma-separated difficulty levels.
+func filterByDifficulty(tasks []*task.Task, difficulty string) []*task.Task {
+	want := make(map[string]bool)
+	for _, tok := range strings.Split(difficulty, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok != "" {
+			want[tok] = true
+		}
+	}
+	var filtered []*task.Task
+	for _, t := range tasks {
+		if want[t.Difficulty] {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+// filterByTier filters tasks to those matching the given tier.
+func filterByTier(tasks []*task.Task, tier string) []*task.Task {
+	var filtered []*task.Task
+	for _, t := range tasks {
+		if t.Tier == tier {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
 }
 
 // newRunnerFromConfig creates a new runner using the global config.

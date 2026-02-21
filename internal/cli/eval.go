@@ -643,10 +643,9 @@ Examples:
 	},
 }
 
-
 // evalRunSingle executes a single eval run for one agent/model/reasoning combination.
 // It handles output directory creation, task execution, aggregation, and output file writing.
-func evalRunSingle(
+func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	interruptCtx context.Context,
 	spec RunSpec,
 	shared SharedConfig,
@@ -678,45 +677,11 @@ func evalRunSingle(
 	// For resume mode: filter out completed tasks and clean incomplete dirs.
 	totalTaskCount := len(allTasks)
 	if isResuming && runCfg != nil {
-		// Build task map for ordering from run config.
-		taskMap := make(map[string]*task.Task)
-		for _, t := range allTasks {
-			taskMap[string(t.Language)+"/"+t.Slug] = t
+		var err error
+		allTasks, tasksToRun, err = prepareResumedTasks(allTasks, runCfg, outputDir, completedTasks)
+		if err != nil {
+			return nil, nil, err
 		}
-
-		// Restore original task order from run config.
-		var orderedTasks []*task.Task
-		var missingTasks []string
-		for _, slug := range runCfg.TaskList {
-			if t, ok := taskMap[slug]; ok {
-				orderedTasks = append(orderedTasks, t)
-			} else {
-				missingTasks = append(missingTasks, slug)
-			}
-		}
-		if len(missingTasks) > 0 {
-			logger.Warn("some tasks from original run not found in current build",
-				"missing", missingTasks,
-				"count", len(missingTasks))
-			fmt.Printf(" Warning: %d task(s) from original run not found: %v\n",
-				len(missingTasks), missingTasks)
-		}
-		allTasks = orderedTasks
-
-		// Clean up incomplete task directories.
-		if err := cleanIncompleteTaskDirs(outputDir, completedTasks, allTasks); err != nil {
-			return nil, nil, fmt.Errorf("cleaning incomplete tasks: %w", err)
-		}
-
-		// Filter out completed tasks.
-		tasksToRun = nil
-		for _, t := range allTasks {
-			taskSlug := string(t.Language) + "/" + t.Slug
-			if !completedTasks[taskSlug] {
-				tasksToRun = append(tasksToRun, t)
-			}
-		}
-
 		if len(tasksToRun) == 0 {
 			fmt.Println("\n All tasks already completed. Nothing to resume.")
 			return nil, nil, nil
@@ -774,7 +739,7 @@ func evalRunSingle(
 		parallel = 1
 	}
 
-	if parallel == 1 {
+	if parallel == 1 { //nolint:nestif // Sequential execution loop with deeply interleaved interrupt/quota/progress handling.
 		consecutiveQuotaExhausted := 0
 		for i, t := range tasksToRun {
 			// Check for interrupt before starting next task.
@@ -2800,6 +2765,55 @@ func loadPreviousAttestation(outputDir string) (*EvalAttestation, error) {
 	}
 
 	return &attestation, nil
+}
+
+// prepareResumedTasks restores task order from the run config, cleans incomplete
+// directories, and filters out already-completed tasks for a resumed eval run.
+func prepareResumedTasks(
+	allTasks []*task.Task,
+	runCfg *RunConfig,
+	outputDir string,
+	completedTasks map[string]bool,
+) ([]*task.Task, []*task.Task, error) {
+	// Build task map for ordering from run config.
+	taskMap := make(map[string]*task.Task)
+	for _, t := range allTasks {
+		taskMap[string(t.Language)+"/"+t.Slug] = t
+	}
+
+	// Restore original task order from run config.
+	var orderedTasks []*task.Task
+	var missingTasks []string
+	for _, slug := range runCfg.TaskList {
+		if t, ok := taskMap[slug]; ok {
+			orderedTasks = append(orderedTasks, t)
+		} else {
+			missingTasks = append(missingTasks, slug)
+		}
+	}
+	if len(missingTasks) > 0 {
+		logger.Warn("some tasks from original run not found in current build",
+			"missing", missingTasks,
+			"count", len(missingTasks))
+		fmt.Printf(" Warning: %d task(s) from original run not found: %v\n",
+			len(missingTasks), missingTasks)
+	}
+
+	// Clean up incomplete task directories.
+	if err := cleanIncompleteTaskDirs(outputDir, completedTasks, orderedTasks); err != nil {
+		return nil, nil, fmt.Errorf("cleaning incomplete tasks: %w", err)
+	}
+
+	// Filter out completed tasks.
+	var tasksToRun []*task.Task
+	for _, t := range orderedTasks {
+		taskSlug := string(t.Language) + "/" + t.Slug
+		if !completedTasks[taskSlug] {
+			tasksToRun = append(tasksToRun, t)
+		}
+	}
+
+	return orderedTasks, tasksToRun, nil
 }
 
 // cleanIncompleteTaskDirs removes task directories that don't have validation.log.
