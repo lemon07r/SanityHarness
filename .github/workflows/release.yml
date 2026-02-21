@@ -9,7 +9,45 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      # Build golangci-lint from source to match our Go version
+      # The pre-built binaries are compiled with Go 1.24 and can't lint Go 1.25 code
+      - name: Install golangci-lint from source
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.7.2
+
+      - name: Run golangci-lint
+        run: golangci-lint run --timeout=5m
+
   release:
+    needs: [test, lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,9 +58,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-
-      - name: Run tests
-        run: go test -race ./...
 
       - name: Build binaries
         run: |
@@ -56,9 +91,9 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          # Get previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # Get previous tag (skip pre-release tags when building stable changelog)
           CURR_TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           
           echo "## What's Changed" > CHANGELOG.md
           echo "" >> CHANGELOG.md
@@ -75,6 +110,18 @@ jobs:
           echo "" >> CHANGELOG.md
           echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURR_TAG}" >> CHANGELOG.md
 
+      - name: Determine pre-release status
+        id: prerelease
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          if [[ "$TAG" == *-alpha* ]] || [[ "$TAG" == *-beta* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Detected pre-release tag: $TAG"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Detected stable release tag: $TAG"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -87,6 +134,6 @@ jobs:
             dist/sanity-windows-amd64.exe
             dist/sanity.toml.example
           draft: false
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
