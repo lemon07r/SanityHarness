@@ -46,7 +46,7 @@ func TestFinalizeEvalResult(t *testing.T) {
 			},
 			weight:     task.Weight{Base: 1.2},
 			wantStatus: task.StatusPartialPass,
-			wantScore:  0.9,
+			wantScore:  1.2,
 		},
 	}
 

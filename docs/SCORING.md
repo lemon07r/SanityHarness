@@ -1,6 +1,6 @@
 # Scoring System
 
-SanityHarness uses a weighted scoring system (v2.0) based on empirically-derived difficulty factors calibrated from agent performance analysis.
+SanityHarness uses a weighted scoring system (v2.1) based on empirically-derived difficulty factors calibrated from agent performance analysis.
 
 ## Overview
 
@@ -17,7 +17,7 @@ Each task result has one of the following statuses:
 | Status | Description |
 |--------|-------------|
 | `pass` | Tests passed, agent completed within timeout |
-| `partial_pass` | Tests passed, but agent timed out (solution was already correct) |
+| `partial_pass` | Tests passed, but agent timed out (solution was already correct; scores same as `pass`) |
 | `fail` | Tests failed |
 | `integrity_violation` | Agent modified protected files (tests or support files) |
 | `error` | Execution error (container failure, validation error, etc.) |
@@ -27,7 +27,7 @@ Each task result has one of the following statuses:
 | Status | Score |
 |--------|-------|
 | Clean pass (`pass`) | 100% of task weight |
-| Partial pass (`partial_pass`) | 75% of task weight |
+| Partial pass (`partial_pass`) | 100% of task weight |
 | Fail (`fail`) | 0 points |
 | Integrity violation (`integrity_violation`) | -0.25 penalty |
 | Error (`error`) | 0 points |
@@ -36,7 +36,6 @@ Each task result has one of the following statuses:
 
 - Task with weight 1.2:
   - Clean pass: 1.2 points
-  - Partial pass: 0.9 points (1.2 × 0.75)
   - Fail: 0 points
   - Integrity violation: -0.25 points
 
@@ -167,8 +166,6 @@ eval-results/<agent>-<timestamp>/
   "failed": 12,
   "errors": 1,
   
-  "clean_passes": 12,
-  "partial_passes": 1,
   "integrity_violations": 0,
   
   "pass_rate": 50.0,
@@ -251,8 +248,6 @@ Optimized for leaderboard submissions:
   "weighted_score": 15.12,
   "max_possible_score": 33.29,
   
-  "clean_passes": 12,
-  "partial_passes": 1,
   "integrity_violations": 0,
   
   "by_language": {

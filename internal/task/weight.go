@@ -2,13 +2,10 @@
 package task
 
 // WeightVersion identifies the scoring methodology version for attestation.
-const WeightVersion = "2.0"
+const WeightVersion = "2.1"
 
 // Scoring constants.
 const (
-	// PartialPassMultiplier is applied to tasks that passed but agent timed out.
-	PartialPassMultiplier = 0.75
-
 	// ViolationPenalty is subtracted for integrity violations (modified test files).
 	ViolationPenalty = 0.25
 
@@ -167,17 +164,15 @@ func searchString(s, substr string) int {
 //
 // Scoring rules:
 //   - Clean pass: 100% of weight
-//   - Partial pass (timeout but correct): 75% of weight
+//   - Partial pass (timeout but correct): 100% of weight (same as clean pass)
 //   - Fail: 0
 //   - Integrity violation: -0.25 penalty
 func ScoreResult(passed, agentTimedOut bool, errorMsg string, weight Weight) float64 {
 	status := DetermineStatus(passed, agentTimedOut, errorMsg)
 
 	switch status {
-	case StatusPass:
+	case StatusPass, StatusPartialPass:
 		return weight.Base
-	case StatusPartialPass:
-		return weight.Base * PartialPassMultiplier
 	case StatusIntegrityViolation:
 		return -ViolationPenalty
 	default:

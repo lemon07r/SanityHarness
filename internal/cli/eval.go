@@ -54,10 +54,12 @@ var (
 
 // Quota retry configuration.
 const (
-	quotaMaxRetries  = 3
-	quotaRetryDelay1 = 10 * time.Second
-	quotaRetryDelay2 = 30 * time.Second
-	quotaRetryDelay3 = 60 * time.Second
+	quotaMaxRetries  = 5
+	quotaRetryDelay1 = 30 * time.Second
+	quotaRetryDelay2 = 60 * time.Second
+	quotaRetryDelay3 = 120 * time.Second
+	quotaRetryDelay4 = 240 * time.Second
+	quotaRetryDelay5 = 480 * time.Second
 
 	// Threshold for considering an agent log as an infra failure (empty or near-empty).
 	infraFailureLogThreshold = 10 // bytes
@@ -65,7 +67,17 @@ const (
 	// Stop eval early after this many consecutive quota-exhausted tasks.
 	// This allows resuming later when quota resets, rather than wasting time
 	// on tasks that will all fail immediately.
-	quotaExhaustedStopThreshold = 3
+	quotaExhaustedStopThreshold = 5
+)
+
+// Infra failure retry configuration (separate from quota retries).
+const (
+	infraMaxRetries  = 5
+	infraRetryDelay1 = 15 * time.Second
+	infraRetryDelay2 = 30 * time.Second
+	infraRetryDelay3 = 60 * time.Second
+	infraRetryDelay4 = 120 * time.Second
+	infraRetryDelay5 = 240 * time.Second
 )
 
 // Patterns indicating recoverable rate limit errors (worth retrying).
@@ -173,8 +185,6 @@ type EvalSummary struct {
 	WeightedScore       float64                  `json:"weighted_score,omitempty"`
 	MaxPossibleScore    float64                  `json:"max_possible_score,omitempty"`
 	WeightedPassRate    float64                  `json:"weighted_pass_rate,omitempty"`
-	CleanPasses         int                      `json:"clean_passes,omitempty"`
-	PartialPasses       int                      `json:"partial_passes,omitempty"`
 	IntegrityViolations int                      `json:"integrity_violations,omitempty"`
 	Duration            float64                  `json:"duration_seconds,omitempty"`
 	AgentTime           float64                  `json:"agent_duration_seconds,omitempty"`
@@ -254,7 +264,7 @@ Examples:
 			if cfg != nil && cfg.Harness.DefaultTimeout > 0 {
 				evalTimeout = cfg.Harness.DefaultTimeout
 			} else {
-				evalTimeout = 120
+				evalTimeout = 600
 			}
 		}
 
@@ -881,8 +891,6 @@ Examples:
 		var totalPromptChars int
 		var totalWeightedScore float64
 		var maxPossibleScore float64
-		var cleanPasses int
-		var partialPasses int
 		var integrityViolations int
 
 		addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
@@ -908,12 +916,7 @@ Examples:
 			maxPossibleScore += r.Weight
 
 			// Count by status
-			switch r.Status {
-			case task.StatusPass:
-				cleanPasses++
-			case task.StatusPartialPass:
-				partialPasses++
-			case task.StatusIntegrityViolation:
+			if r.Status == task.StatusIntegrityViolation {
 				integrityViolations++
 			}
 
@@ -974,8 +977,6 @@ Examples:
 			WeightedScore:       totalWeightedScore,
 			MaxPossibleScore:    maxPossibleScore,
 			WeightedPassRate:    weightedPassRate,
-			CleanPasses:         cleanPasses,
-			PartialPasses:       partialPasses,
 			IntegrityViolations: integrityViolations,
 			Duration:            totalDuration,
 			AgentTime:           totalAgentTime,
@@ -1119,7 +1120,7 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 
 	agentTimeout := time.Duration(timeout) * time.Second
 	if agentTimeout <= 0 {
-		agentTimeout = 120 * time.Second
+		agentTimeout = 600 * time.Second
 	}
 	// Apply per-agent default timeout as a floor (for agents with buffered output)
 	if agentCfg.DefaultTimeout > 0 {
@@ -1242,6 +1243,7 @@ type agentExecutionResult struct {
 	timedOut       bool
 	quotaRetries   int
 	quotaExhausted bool
+	infraRetries   int
 	infraFailure   bool // true when agent produced no output after all retries
 }
 
@@ -1261,21 +1263,29 @@ func executeAgentWithRetries(
 	workspaceReadyAt time.Time,
 ) agentExecutionResult {
 	var result agentExecutionResult
+	var quotaAttempts, infraAttempts int
+	var lastRetryType string // "quota" or "infra"
 
-	for attempt := 0; attempt <= quotaMaxRetries; attempt++ {
-		// On retry, wait (interruptible) and log
-		if attempt > 0 {
-			delay := getRetryDelay(attempt)
+	for {
+		totalAttempt := quotaAttempts + infraAttempts
+
+		// On retry, wait (interruptible) and log.
+		if totalAttempt > 0 {
+			var delay time.Duration
+			if lastRetryType == "infra" {
+				delay = getInfraRetryDelay(infraAttempts)
+			} else {
+				delay = getRetryDelay(quotaAttempts)
+			}
 			logger.Info("retrying agent execution",
 				"task", t.ID(),
-				"attempt", attempt,
+				"attempt", totalAttempt,
+				"type", lastRetryType,
 				"delay", delay)
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				break
 			}
-			result.quotaRetries = attempt
 		}
 
 		// Check for interrupt before starting attempt.
@@ -1283,38 +1293,46 @@ func executeAgentWithRetries(
 			break
 		}
 
-		// Run single attempt
-		attemptResult := runAgentAttempt(ctx, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, attempt)
+		// Run single attempt.
+		attemptResult := runAgentAttempt(ctx, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, totalAttempt)
 		result.totalTime += attemptResult.duration
 		result.timedOut = attemptResult.timedOut
 
-		// Check for quota errors and decide whether to retry
+		// Check for quota errors first.
 		hasError, isRecoverable := detectQuotaError(agentLogPath)
-		if !hasError {
-			// Check for infra failures (empty/near-empty logs).
-			// Pass workspaceDir so we can detect agents that write files but no stdout.
-			if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
-				if attempt == quotaMaxRetries {
-					result.quotaExhausted = true
-					result.infraFailure = true
-					logger.Debug("max retries reached for infra failure", "task", t.ID(), "retries", quotaMaxRetries)
-					break
-				}
-				logger.Debug("infra failure detected (empty agent log), will retry", "task", t.ID())
-				continue
+		if hasError {
+			if !isRecoverable {
+				result.quotaExhausted = true
+				logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
+				break
 			}
-			break // No quota error and no infra failure, we're done
+			quotaAttempts++
+			result.quotaRetries = quotaAttempts
+			if quotaAttempts >= quotaMaxRetries {
+				result.quotaExhausted = true
+				logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
+				break
+			}
+			lastRetryType = "quota"
+			continue
 		}
-		if !isRecoverable {
-			result.quotaExhausted = true
-			logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
-			break
+
+		// Check for infra failures (no quota error detected).
+		if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
+			infraAttempts++
+			result.infraRetries = infraAttempts
+			if infraAttempts >= infraMaxRetries {
+				result.quotaExhausted = true
+				result.infraFailure = true
+				logger.Debug("max infra retries reached", "task", t.ID(), "retries", infraMaxRetries)
+				break
+			}
+			lastRetryType = "infra"
+			continue
 		}
-		if attempt == quotaMaxRetries {
-			result.quotaExhausted = true
-			logger.Debug("max retries reached", "task", t.ID(), "retries", quotaMaxRetries)
-			break
-		}
+
+		// Success — no quota error, no infra failure.
+		break
 	}
 
 	return result
@@ -2119,8 +2137,6 @@ type LeaderboardSubmission struct {
 	MaxPossibleScore float64 `json:"max_possible_score"`
 
 	// Quality metrics
-	CleanPasses         int `json:"clean_passes"`
-	PartialPasses       int `json:"partial_passes"`
 	IntegrityViolations int `json:"integrity_violations"`
 
 	// Per-language breakdown
@@ -2165,8 +2181,6 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		Total:               summary.Total,
 		WeightedScore:       summary.WeightedScore,
 		MaxPossibleScore:    summary.MaxPossibleScore,
-		CleanPasses:         summary.CleanPasses,
-		PartialPasses:       summary.PartialPasses,
 		IntegrityViolations: summary.IntegrityViolations,
 		TotalDurationSec:    summary.Duration,
 		AgentDurationSec:    summary.AgentTime,
@@ -2251,10 +2265,8 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 
 func writeReportQuality(sb *strings.Builder, summary EvalSummary) {
 	sb.WriteString("## Quality Breakdown\n\n")
-	fmt.Fprintf(sb, "- **Clean Passes**: %d\n", summary.CleanPasses)
-	fmt.Fprintf(sb, "- **Partial Passes** (timed out but passed): %d\n", summary.PartialPasses)
 	fmt.Fprintf(sb, "- **Integrity Violations** (modified test files): %d\n", summary.IntegrityViolations)
-	fmt.Fprintf(sb, "- **Failures**: %d\n", summary.Failed-summary.IntegrityViolations-summary.PartialPasses)
+	fmt.Fprintf(sb, "- **Failures**: %d\n", summary.Failed-summary.IntegrityViolations)
 	sb.WriteString("\n")
 }
 
@@ -2307,8 +2319,6 @@ func getResultStatusDisplay(r EvalResult) (icon, text string) {
 	switch {
 	case r.Status == task.StatusIntegrityViolation:
 		return "🚫", "VIOLATION"
-	case r.Status == task.StatusPartialPass:
-		return "⚠️", "PARTIAL"
 	case r.Passed:
 		return "✅", "PASS"
 	default:
@@ -2376,15 +2386,35 @@ func detectQuotaError(logPath string) (bool, bool) {
 	return false, false
 }
 
-// getRetryDelay returns the delay for the given retry attempt (1-indexed).
+// getRetryDelay returns the delay for the given quota retry attempt (1-indexed).
 func getRetryDelay(attempt int) time.Duration {
 	switch attempt {
 	case 1:
 		return quotaRetryDelay1
 	case 2:
 		return quotaRetryDelay2
-	default:
+	case 3:
 		return quotaRetryDelay3
+	case 4:
+		return quotaRetryDelay4
+	default:
+		return quotaRetryDelay5
+	}
+}
+
+// getInfraRetryDelay returns the delay for the given infra retry attempt (1-indexed).
+func getInfraRetryDelay(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return infraRetryDelay1
+	case 2:
+		return infraRetryDelay2
+	case 3:
+		return infraRetryDelay3
+	case 4:
+		return infraRetryDelay4
+	default:
+		return infraRetryDelay5
 	}
 }
 

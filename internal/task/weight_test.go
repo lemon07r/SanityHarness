@@ -149,7 +149,7 @@ func TestScoreResult(t *testing.T) {
 			name:          "partial_pass",
 			passed:        true,
 			agentTimedOut: true,
-			want:          1.125, // 1.5 * 0.75
+			want:          1.5, // same as clean pass
 		},
 		{
 			name:   "fail",
@@ -178,9 +178,6 @@ func TestScoreResult(t *testing.T) {
 func TestScoringConstants(t *testing.T) {
 	t.Parallel()
 
-	if PartialPassMultiplier != 0.75 {
-		t.Errorf("PartialPassMultiplier = %v, want 0.75", PartialPassMultiplier)
-	}
 	if ViolationPenalty != 0.25 {
 		t.Errorf("ViolationPenalty = %v, want 0.25", ViolationPenalty)
 	}
