@@ -52,6 +52,8 @@ class ReactiveCache<K, V> {
   ///
   /// [defaultTtl] is the default time-to-live for cache entries.
   /// [loader] is an optional function to load values when they're not in cache.
+  ///
+  /// Throws [ArgumentError] if [defaultTtl] is negative.
   ReactiveCache({
     required this.defaultTtl,
     this.loader,
@@ -65,18 +67,23 @@ class ReactiveCache<K, V> {
   /// will be called to fetch the value.
   ///
   /// Throws [StateError] if the key is not in cache and no loader is available.
+  /// Throws [StateError] if the cache has been disposed.
   Future<V> get(K key) async {
     // TODO: Implement get with automatic loading
     throw UnimplementedError();
   }
 
   /// Sets a value in the cache with the default TTL.
+  ///
+  /// Throws [StateError] if the cache has been disposed.
   Future<void> set(K key, V value) async {
     // TODO: Implement set
     throw UnimplementedError();
   }
 
   /// Sets a value in the cache with a custom TTL.
+  ///
+  /// Throws [StateError] if the cache has been disposed.
   Future<void> setWithTtl(K key, V value, Duration ttl) async {
     // TODO: Implement setWithTtl
     throw UnimplementedError();
@@ -85,12 +92,15 @@ class ReactiveCache<K, V> {
   /// Removes a value from the cache.
   ///
   /// Returns true if the key was present and removed, false otherwise.
+  /// Throws [StateError] if the cache has been disposed.
   Future<bool> remove(K key) async {
     // TODO: Implement remove
     throw UnimplementedError();
   }
 
   /// Returns true if the cache contains the given key and it hasn't expired.
+  ///
+  /// Throws [StateError] if the cache has been disposed.
   bool containsKey(K key) {
     // TODO: Implement containsKey
     throw UnimplementedError();
@@ -100,14 +110,19 @@ class ReactiveCache<K, V> {
   /// for the given key.
   ///
   /// If the key is not in the cache, the stream will emit values when they
-  /// are added. If a loader is available, it will be used to load the initial
-  /// value.
+  /// are added later. If a loader is available, it may be used to load the
+  /// initial value.
+  ///
+  /// Throws [StateError] if the cache has been disposed.
   Stream<V> watch(K key) {
     // TODO: Implement watch
     throw UnimplementedError();
   }
 
   /// Disposes of the cache, canceling all timers and closing all streams.
+  ///
+  /// After disposal, calls to `get`, `set`, `setWithTtl`, `remove`,
+  /// `containsKey`, and `watch` must throw [StateError].
   Future<void> dispose() async {
     // TODO: Implement dispose
     throw UnimplementedError();

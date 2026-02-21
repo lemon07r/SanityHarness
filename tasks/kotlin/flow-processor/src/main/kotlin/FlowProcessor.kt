@@ -42,6 +42,10 @@ infix fun <T, R, S> FlowProcessor<T, R>.then(other: FlowProcessor<R, S>): FlowPr
 
 /**
  * Creates a processor that batches elements into lists of the given size.
+ *
+ * Contract:
+ * - Emits lists of exactly [size] elements while enough input exists.
+ * - Emits one final partial batch if input completes with leftover elements.
  */
 fun <T> batch(size: Int): FlowProcessor<T, List<T>> {
     TODO("Implement batch processor")
@@ -49,6 +53,10 @@ fun <T> batch(size: Int): FlowProcessor<T, List<T>> {
 
 /**
  * Creates a processor that handles errors with a recovery function.
+ *
+ * Contract:
+ * - When processing an element throws, emit `handler(error)` for that failure.
+ * - Continue processing subsequent elements after recovery.
  */
 fun <T> recover(handler: suspend (Throwable) -> T): FlowProcessor<T, T> {
     TODO("Implement recover processor")

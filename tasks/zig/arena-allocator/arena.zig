@@ -2,6 +2,16 @@ const std = @import("std");
 
 /// A simple arena allocator that allocates memory from a fixed buffer.
 /// Memory is freed all at once when the arena is deinitialized.
+///
+/// Behavioral requirements:
+/// - Allocation is bump-pointer style inside the provided `buffer`.
+/// - `alloc`/`allocAligned` return null when space is insufficient.
+/// - `allocAligned` must satisfy the requested alignment.
+/// - Child arenas allocate from parent remaining space without invalidating the
+///   parent on child deinit.
+/// - `saveState`/`restoreState` must support rolling back allocations.
+/// - `resize` may only succeed for resizable allocations under arena rules.
+/// - `allocator()` must expose this arena via `std.mem.Allocator`.
 pub const Arena = struct {
     buffer: []u8,
     offset: usize,
@@ -89,6 +99,7 @@ pub const Arena = struct {
     }
 
     /// Returns the allocator interface for this arena.
+    /// The adapter must route allocator operations to this arena's state.
     pub fn allocator(self: *Arena) std.mem.Allocator {
         _ = self;
         @panic("Please implement Arena.allocator");

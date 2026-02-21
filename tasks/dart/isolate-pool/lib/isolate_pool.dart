@@ -2,6 +2,14 @@ import 'dart:async';
 import 'dart:isolate';
 
 /// A pool of isolates for executing tasks in parallel.
+///
+/// Behavioral requirements:
+/// - `start()` initializes worker isolates and their communication channels.
+/// - `submit()` dispatches work to running workers and returns each task result.
+/// - Task failures must propagate to the returned future and must not corrupt
+///   the pool: subsequent valid submissions should still work.
+/// - `shutdown()` waits for pending tasks before stopping workers.
+/// - `shutdownNow()` terminates workers immediately.
 class IsolatePool {
   /// Creates a new isolate pool with the specified number of workers.
   IsolatePool(int workerCount) {
@@ -17,6 +25,7 @@ class IsolatePool {
   /// 
   /// The [task] function will be executed in one of the worker isolates.
   /// The function must be a top-level function or a static method.
+  /// If task execution fails, the returned future completes with that error.
   Future<R> submit<T, R>(R Function(T) task, T argument) {
     throw UnimplementedError('Please implement submit');
   }
@@ -44,6 +53,11 @@ class IsolatePool {
 
 /// Entry point for worker isolates.
 /// This must be a top-level function.
+///
+/// Communication contract:
+/// - Worker and main isolate must establish a two-way messaging channel.
+/// - Each submitted job message must include the callable, its argument, and a
+///   response channel for either a success value or an error payload.
 void _workerEntryPoint(SendPort sendPort) {
   throw UnimplementedError('Please implement worker entry point');
 }

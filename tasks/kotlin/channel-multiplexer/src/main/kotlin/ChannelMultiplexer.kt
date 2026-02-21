@@ -7,11 +7,16 @@ import kotlinx.coroutines.flow.*
 /**
  * A channel multiplexer that combines multiple input channels into a single output channel.
  * 
- * The multiplexer should:
- * - Accept multiple input channels via addChannel()
- * - Forward all values from input channels to the output channel
- * - Support cancellation - when cancelled, all input processing should stop
- * - Handle channel closure gracefully
+ * Behavioral requirements:
+ * - Accept multiple input channels and forward all received values to [output].
+ * - Channel names are unique across active channels.
+ * - [addChannel] behaves like priority 0.
+ * - [addPriorityChannel] accepts priority >= 0; higher values have higher
+ *   precedence when multiple channels are immediately selectable.
+ * - Removing or closing a channel must stop future forwarding from that channel.
+ * - [getActiveChannelCount] reflects currently active (not removed/closed)
+ *   channels.
+ * - [cancel] stops forwarding and closes [output].
  * 
  * Example usage:
  * ```
@@ -44,6 +49,7 @@ class ChannelMultiplexer<T>(
     /**
      * Add an input channel to the multiplexer.
      * All values sent to this channel will be forwarded to the output channel.
+     * This is equivalent to calling [addPriorityChannel] with priority 0.
      * 
      * @param name A unique identifier for this channel
      * @param channel The input channel to add
@@ -58,6 +64,7 @@ class ChannelMultiplexer<T>(
      *
      * Higher priority channels should be selected first when multiple channels
      * have buffered values available.
+     * Priority 0 is valid and is the lowest priority.
      *
      * @throws IllegalArgumentException if a channel with this name already exists
      * @throws IllegalArgumentException if priority is negative
@@ -70,13 +77,15 @@ class ChannelMultiplexer<T>(
      * Remove a channel by name.
      *
      * Returns true if the channel existed and was removed.
+     * After removal, values from that channel must no longer be forwarded.
      */
     fun removeChannel(name: String): Boolean {
         TODO("Implement removeChannel")
     }
 
     /**
-     * Returns the number of currently active channels.
+     * Returns the number of currently active channels (excluding removed or
+     * closed channels).
      */
     fun getActiveChannelCount(): Int {
         TODO("Implement getActiveChannelCount")
@@ -85,7 +94,8 @@ class ChannelMultiplexer<T>(
     /**
      * Configure the output channel buffer size.
      *
-     * Must be called before consuming from [output].
+     * Must be called before consuming from [output]. The configured buffer
+     * applies to values forwarded after configuration.
      */
     fun setBufferSize(size: Int) {
         TODO("Implement setBufferSize")
@@ -110,6 +120,9 @@ data class TaggedValue<T>(
 /**
  * A tagged channel multiplexer that wraps each value with its source channel name.
  * This allows consumers to know which channel each value came from.
+ *
+ * Behavioral requirements match [ChannelMultiplexer], with the additional
+ * guarantee that each emitted value is tagged with the originating channel name.
  * 
  * Example usage:
  * ```
@@ -148,6 +161,7 @@ class TaggedChannelMultiplexer<T>(
      *
      * Higher priority channels should be selected first when multiple channels
      * have buffered values available.
+     * Priority 0 is valid and is the lowest priority.
      */
     fun addPriorityChannel(name: String, channel: ReceiveChannel<T>, priority: Int) {
         TODO("Implement addPriorityChannel")

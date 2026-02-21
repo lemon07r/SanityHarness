@@ -33,6 +33,10 @@ macro_rules! vec_of {
 
 /// A macro that counts its arguments.
 ///
+/// Counts top-level, comma-separated Rust expressions.
+/// Commas that are part of an expression (for example in tuples, blocks, or
+/// function calls) do not split arguments.
+///
 /// Example:
 /// ```
 /// # use macros::count_args;
