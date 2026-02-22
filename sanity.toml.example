@@ -30,6 +30,7 @@ auto_pull = true            # automatically pull images if missing
 # Use writable_dirs only for non-dot directories that need write access:
 [sandbox]
 # writable_dirs = ["go", "my-tool-data"]
+# readable_denylist = ["tasks", "eval-results", "sessions"]
 
 # =============================================================================
 # Agent Configuration

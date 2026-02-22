@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -34,23 +35,24 @@ var (
 	// TODO(consistency): Consider passing evalReasoning explicitly through the call
 	// stack (runTaskWithAgent -> executeAgentWithRetries -> runAgentAttempt) to match
 	// the pattern used for model. Currently safe since it's read-only after CLI parse.
-	evalReasoning      string
-	evalTasks          string
-	evalLang           string
-	evalTier           string
-	evalDifficulty     string
-	evalTimeout        int
-	evalOutputDir      string
-	evalKeepWorkspaces bool
-	evalParallel       int
-	evalDryRun         bool
-	evalUseMCPTools    bool
-	evalDisableMCP     bool
-	evalNoSandbox      bool
-	evalLegacy         bool
-	evalSandboxActive  bool
-	evalResume         string
-	evalRepeat         int
+	evalReasoning       string
+	evalTasks           string
+	evalLang            string
+	evalTier            string
+	evalDifficulty      string
+	evalTimeout         int
+	evalOutputDir       string
+	evalKeepWorkspaces  bool
+	evalParallel        int
+	evalDryRun          bool
+	evalUseMCPTools     bool
+	evalDisableMCP      bool
+	evalNoSandbox       bool
+	evalLegacy          bool
+	evalSandboxActive   bool
+	evalSandboxDenylist []string
+	evalResume          string
+	evalRepeat          int
 )
 
 // Quota retry configuration.
@@ -135,27 +137,71 @@ var nonRecoverablePatterns = []string{
 	"subscription limit",
 }
 
+var selfTestCommandPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bgo test\b`),
+	regexp.MustCompile(`(?i)\bcargo test\b`),
+	regexp.MustCompile(`(?i)\bgradle test\b`),
+	regexp.MustCompile(`(?i)\./gradlew test\b`),
+	regexp.MustCompile(`(?i)\bzig build test\b`),
+	regexp.MustCompile(`(?i)\bdart test\b`),
+	regexp.MustCompile(`(?i)\bnpx tsx --test\b`),
+	regexp.MustCompile(`(?i)\bnpm test\b`),
+	regexp.MustCompile(`(?i)\bpnpm test\b`),
+	regexp.MustCompile(`(?i)\byarn test\b`),
+	regexp.MustCompile(`(?i)\bbun test\b`),
+}
+
+var toolchainInstallPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bapt(?:-get)?\s+install\b`),
+	regexp.MustCompile(`(?i)\byum\s+install\b`),
+	regexp.MustCompile(`(?i)\bapk\s+add\b`),
+	regexp.MustCompile(`(?i)\bbrew\s+install\b`),
+	regexp.MustCompile(`(?i)\bpip3?\s+install\b`),
+	regexp.MustCompile(`(?i)\bnpm\s+install\s+-g\b`),
+	regexp.MustCompile(`(?i)\bcargo\s+install\b`),
+	regexp.MustCompile(`(?i)\bgo\s+install\b`),
+	regexp.MustCompile(`(?i)\bcurl\b.*ziglang\.org/download`),
+	regexp.MustCompile(`(?i)\bwget\b.*ziglang\.org/download`),
+}
+
+var outOfWorkspaceReadPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bfind\s+/`),
+	regexp.MustCompile(`(?i)\bls\s+-la\s+/`),
+	regexp.MustCompile(`(?i)/tasks/`),
+	regexp.MustCompile(`(?i)/eval-results/`),
+	regexp.MustCompile(`(?i)/sessions/`),
+}
+
+type agentBehaviorMetrics struct {
+	SelfTestCommands         int
+	ToolchainInstallAttempts int
+	OutOfWorkspaceReads      int
+}
+
 // EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
-	Task           string            `json:"task"`
-	Language       string            `json:"language"`
-	Tier           string            `json:"tier,omitempty"`
-	Difficulty     string            `json:"difficulty,omitempty"`
-	Passed         bool              `json:"passed"`
-	AgentTimedOut  bool              `json:"agent_timed_out"`
-	Status         task.ResultStatus `json:"status"`
-	Attempts       int               `json:"attempts"`
-	Duration       float64           `json:"duration_seconds"`
-	AgentTime      float64           `json:"agent_duration_seconds,omitempty"`
-	ValidateTime   float64           `json:"validation_duration_seconds,omitempty"`
-	PromptChars    int               `json:"prompt_chars,omitempty"`
-	Error          string            `json:"error,omitempty"`
-	Weight         float64           `json:"weight,omitempty"`
-	WeightedScore  float64           `json:"weighted_score,omitempty"`
-	QuotaRetries   int               `json:"quota_retries"`
-	QuotaExhausted bool              `json:"quota_exhausted"`
-	InfraFailure   bool              `json:"infra_failure"`
-	WorkspaceDir   string            `json:"-"` // Not serialized, used for cleanup
+	Task                       string            `json:"task"`
+	Language                   string            `json:"language"`
+	Tier                       string            `json:"tier,omitempty"`
+	Difficulty                 string            `json:"difficulty,omitempty"`
+	Passed                     bool              `json:"passed"`
+	AgentTimedOut              bool              `json:"agent_timed_out"`
+	Status                     task.ResultStatus `json:"status"`
+	Attempts                   int               `json:"attempts"`
+	Duration                   float64           `json:"duration_seconds"`
+	AgentTime                  float64           `json:"agent_duration_seconds,omitempty"`
+	ValidateTime               float64           `json:"validation_duration_seconds,omitempty"`
+	PromptChars                int               `json:"prompt_chars,omitempty"`
+	Error                      string            `json:"error,omitempty"`
+	Weight                     float64           `json:"weight,omitempty"`
+	WeightedScore              float64           `json:"weighted_score,omitempty"`
+	QuotaRetries               int               `json:"quota_retries"`
+	QuotaExhausted             bool              `json:"quota_exhausted"`
+	InfraFailure               bool              `json:"infra_failure"`
+	SelfTestCommands           int               `json:"self_test_commands"`
+	ToolchainInstallAttempts   int               `json:"toolchain_install_attempts"`
+	OutOfWorkspaceReadAttempts int               `json:"out_of_workspace_read_attempts"`
+	WorkspaceDir               string            `json:"-"` // Not serialized, used for cleanup
 }
 
 // EvalAggregate summarizes results for a group (language, tier, difficulty).
@@ -171,36 +217,42 @@ type EvalAggregate struct {
 
 // EvalSummary holds the overall evaluation summary.
 type EvalSummary struct {
-	Agent               string                   `json:"agent"`
-	Model               string                   `json:"model,omitempty"`
-	Reasoning           string                   `json:"reasoning,omitempty"`
-	Timestamp           string                   `json:"timestamp"`
-	Tier                string                   `json:"tier,omitempty"`
-	Difficulty          string                   `json:"difficulty,omitempty"`
-	Timeout             int                      `json:"timeout"`
-	Parallel            int                      `json:"parallel"`
-	Results             []EvalResult             `json:"results"`
-	Passed              int                      `json:"passed"`
-	Failed              int                      `json:"failed"`
-	Total               int                      `json:"total"`
-	PassRate            float64                  `json:"pass_rate"`
-	WeightedScore       float64                  `json:"weighted_score,omitempty"`
-	MaxPossibleScore    float64                  `json:"max_possible_score,omitempty"`
-	WeightedPassRate    float64                  `json:"weighted_pass_rate,omitempty"`
-	IntegrityViolations int                      `json:"integrity_violations,omitempty"`
-	Duration            float64                  `json:"duration_seconds,omitempty"`
-	AgentTime           float64                  `json:"agent_duration_seconds,omitempty"`
-	ValidateTime        float64                  `json:"validation_duration_seconds,omitempty"`
-	PromptChars         int                      `json:"prompt_chars,omitempty"`
-	ByLanguage          map[string]EvalAggregate `json:"by_language,omitempty"`
-	ByTier              map[string]EvalAggregate `json:"by_tier,omitempty"`
-	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
-	UseMCPTools         bool                     `json:"use_mcp_tools"`
-	DisableMCP          bool                     `json:"disable_mcp"`
-	Sandbox             bool                     `json:"sandbox"`
-	Legacy              bool                     `json:"legacy"`
-	QuotaAffectedTasks  int                      `json:"quota_affected_tasks"`
-	TotalQuotaRetries   int                      `json:"total_quota_retries"`
+	Agent                           string                   `json:"agent"`
+	Model                           string                   `json:"model,omitempty"`
+	Reasoning                       string                   `json:"reasoning,omitempty"`
+	Timestamp                       string                   `json:"timestamp"`
+	Tier                            string                   `json:"tier,omitempty"`
+	Difficulty                      string                   `json:"difficulty,omitempty"`
+	Timeout                         int                      `json:"timeout"`
+	Parallel                        int                      `json:"parallel"`
+	Results                         []EvalResult             `json:"results"`
+	Passed                          int                      `json:"passed"`
+	Failed                          int                      `json:"failed"`
+	Total                           int                      `json:"total"`
+	PassRate                        float64                  `json:"pass_rate"`
+	WeightedScore                   float64                  `json:"weighted_score,omitempty"`
+	MaxPossibleScore                float64                  `json:"max_possible_score,omitempty"`
+	WeightedPassRate                float64                  `json:"weighted_pass_rate,omitempty"`
+	IntegrityViolations             int                      `json:"integrity_violations,omitempty"`
+	Duration                        float64                  `json:"duration_seconds,omitempty"`
+	AgentTime                       float64                  `json:"agent_duration_seconds,omitempty"`
+	ValidateTime                    float64                  `json:"validation_duration_seconds,omitempty"`
+	PromptChars                     int                      `json:"prompt_chars,omitempty"`
+	ByLanguage                      map[string]EvalAggregate `json:"by_language,omitempty"`
+	ByTier                          map[string]EvalAggregate `json:"by_tier,omitempty"`
+	ByDifficulty                    map[string]EvalAggregate `json:"by_difficulty,omitempty"`
+	UseMCPTools                     bool                     `json:"use_mcp_tools"`
+	DisableMCP                      bool                     `json:"disable_mcp"`
+	Sandbox                         bool                     `json:"sandbox"`
+	Legacy                          bool                     `json:"legacy"`
+	QuotaAffectedTasks              int                      `json:"quota_affected_tasks"`
+	TotalQuotaRetries               int                      `json:"total_quota_retries"`
+	TotalSelfTestCommands           int                      `json:"total_self_test_commands"`
+	TotalToolchainInstallAttempts   int                      `json:"total_toolchain_install_attempts"`
+	TotalOutOfWorkspaceReadAttempts int                      `json:"total_out_of_workspace_read_attempts"`
+	TasksWithSelfTesting            int                      `json:"tasks_with_self_testing"`
+	TasksWithToolchainInstall       int                      `json:"tasks_with_toolchain_install"`
+	TasksWithOutOfWorkspaceReads    int                      `json:"tasks_with_out_of_workspace_reads"`
 }
 
 // RunSpec defines a single eval run's configuration.
@@ -550,6 +602,7 @@ Examples:
 
 		// Detect sandbox availability.
 		evalSandboxActive = initSandbox()
+		evalSandboxDenylist = resolveSandboxDenylistPaths(cfg.Sandbox.ReadableDenylist, evalOutputDir)
 
 		// Protect the tasks/ directory from agent modification during eval.
 		if restoreFn, err := protectTasksDir(); err != nil {
@@ -1041,6 +1094,12 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	var totalWeightedScore float64
 	var maxPossibleScore float64
 	var integrityViolations int
+	var totalSelfTestCommands int
+	var totalToolchainInstallAttempts int
+	var totalOutOfWorkspaceReadAttempts int
+	var tasksWithSelfTesting int
+	var tasksWithToolchainInstall int
+	var tasksWithOutOfWorkspaceReads int
 
 	addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
 		agg := m[key]
@@ -1063,6 +1122,18 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		totalPromptChars += r.PromptChars
 		totalWeightedScore += r.WeightedScore
 		maxPossibleScore += r.Weight
+		totalSelfTestCommands += r.SelfTestCommands
+		totalToolchainInstallAttempts += r.ToolchainInstallAttempts
+		totalOutOfWorkspaceReadAttempts += r.OutOfWorkspaceReadAttempts
+		if r.SelfTestCommands > 0 {
+			tasksWithSelfTesting++
+		}
+		if r.ToolchainInstallAttempts > 0 {
+			tasksWithToolchainInstall++
+		}
+		if r.OutOfWorkspaceReadAttempts > 0 {
+			tasksWithOutOfWorkspaceReads++
+		}
 
 		// Count by status
 		if r.Status == task.StatusIntegrityViolation {
@@ -1111,36 +1182,42 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	}
 
 	summary := EvalSummary{
-		Agent:               spec.Agent,
-		Model:               model,
-		Reasoning:           spec.Reasoning,
-		Timestamp:           timestamp,
-		Tier:                shared.Tier,
-		Difficulty:          shared.Difficulty,
-		Timeout:             shared.Timeout,
-		Parallel:            parallel,
-		Results:             results,
-		Passed:              passed,
-		Failed:              failed,
-		Total:               total,
-		PassRate:            passRate,
-		WeightedScore:       totalWeightedScore,
-		MaxPossibleScore:    maxPossibleScore,
-		WeightedPassRate:    weightedPassRate,
-		IntegrityViolations: integrityViolations,
-		Duration:            totalDuration,
-		AgentTime:           totalAgentTime,
-		ValidateTime:        totalValidateTime,
-		PromptChars:         totalPromptChars,
-		ByLanguage:          finalize(byLanguage),
-		ByTier:              finalize(byTier),
-		ByDifficulty:        finalize(byDifficulty),
-		UseMCPTools:         shared.UseMCPTools,
-		DisableMCP:          shared.DisableMCP,
-		Sandbox:             evalSandboxActive,
-		Legacy:              shared.Legacy,
-		QuotaAffectedTasks:  quotaAffectedTasks,
-		TotalQuotaRetries:   totalQuotaRetries,
+		Agent:                           spec.Agent,
+		Model:                           model,
+		Reasoning:                       spec.Reasoning,
+		Timestamp:                       timestamp,
+		Tier:                            shared.Tier,
+		Difficulty:                      shared.Difficulty,
+		Timeout:                         shared.Timeout,
+		Parallel:                        parallel,
+		Results:                         results,
+		Passed:                          passed,
+		Failed:                          failed,
+		Total:                           total,
+		PassRate:                        passRate,
+		WeightedScore:                   totalWeightedScore,
+		MaxPossibleScore:                maxPossibleScore,
+		WeightedPassRate:                weightedPassRate,
+		IntegrityViolations:             integrityViolations,
+		Duration:                        totalDuration,
+		AgentTime:                       totalAgentTime,
+		ValidateTime:                    totalValidateTime,
+		PromptChars:                     totalPromptChars,
+		ByLanguage:                      finalize(byLanguage),
+		ByTier:                          finalize(byTier),
+		ByDifficulty:                    finalize(byDifficulty),
+		UseMCPTools:                     shared.UseMCPTools,
+		DisableMCP:                      shared.DisableMCP,
+		Sandbox:                         evalSandboxActive,
+		Legacy:                          shared.Legacy,
+		QuotaAffectedTasks:              quotaAffectedTasks,
+		TotalQuotaRetries:               totalQuotaRetries,
+		TotalSelfTestCommands:           totalSelfTestCommands,
+		TotalToolchainInstallAttempts:   totalToolchainInstallAttempts,
+		TotalOutOfWorkspaceReadAttempts: totalOutOfWorkspaceReadAttempts,
+		TasksWithSelfTesting:            tasksWithSelfTesting,
+		TasksWithToolchainInstall:       tasksWithToolchainInstall,
+		TasksWithOutOfWorkspaceReads:    tasksWithOutOfWorkspaceReads,
 	}
 
 	summaryPath := filepath.Join(outputDir, "summary.json")
@@ -1301,6 +1378,10 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	result.QuotaRetries = agentResult.quotaRetries
 	result.QuotaExhausted = agentResult.quotaExhausted
 	result.InfraFailure = agentResult.infraFailure
+	metrics := parseAgentBehaviorMetrics(agentLogPath)
+	result.SelfTestCommands = metrics.SelfTestCommands
+	result.ToolchainInstallAttempts = metrics.ToolchainInstallAttempts
+	result.OutOfWorkspaceReadAttempts = metrics.OutOfWorkspaceReads
 
 	// If the agent never produced output (infra failure), skip validation entirely.
 	// The task will be excluded from results so it can be resumed later.
@@ -1369,7 +1450,20 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 
 	if err != nil {
 		timedOut := strings.Contains(strings.ToLower(err.Error()), "timed out")
-		writeValidationLog(validationLogPath, "", effectiveValidationCmd, -1, time.Duration(result.ValidateTime*float64(time.Second)), timedOut, err)
+		rawOutput := ""
+		exitCode := -1
+		duration := time.Duration(result.ValidateTime * float64(time.Second))
+		if session != nil {
+			result.Passed = session.Passed()
+			result.Attempts = len(session.Attempts)
+			if len(session.Attempts) > 0 {
+				lastAttempt := session.Attempts[len(session.Attempts)-1]
+				rawOutput = lastAttempt.RawOutput
+				exitCode = lastAttempt.ExitCode
+				duration = lastAttempt.Duration
+			}
+		}
+		writeValidationLog(validationLogPath, rawOutput, effectiveValidationCmd, exitCode, duration, timedOut, err)
 		result.Error = err.Error()
 		return result
 	}
@@ -1546,7 +1640,7 @@ func runAgentAttempt(
 		if cfg != nil {
 			extraDirs = cfg.Sandbox.WritableDirs
 		}
-		cmd = wrapCommandWithSandbox(agentCtx, cmd, extraDirs)
+		cmd = wrapCommandWithSandbox(agentCtx, cmd, extraDirs, evalSandboxDenylist)
 	}
 
 	// Run agent in its own process group so we can kill the entire tree on
@@ -1676,10 +1770,10 @@ FILES TO READ:
 - Test files:          %s
 
 ENVIRONMENT:
-- Tests run automatically in a Docker container.
+- Final validation runs automatically in a Docker container.
 - Toolchain: %s
-- You do NOT need to run tests yourself.
-- Do NOT search for or install language toolchains/SDKs.
+- You may run local tests/commands in the workspace while iterating.
+- Toolchains are preinstalled; extra installs are optional.
 
 YOUR TASK:
 1. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
@@ -1879,8 +1973,8 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 // The sandbox restricts filesystem access so the agent can only write to the
 // workspace directory and /tmp. The rest of the filesystem (including $HOME)
 // is mounted read-only. Network access is preserved for LLM API calls.
-func wrapCommandWithSandbox(ctx context.Context, cmd *exec.Cmd, extraWritableDirs []string) *exec.Cmd {
-	bwrapArgs := buildSandboxArgs(cmd.Dir, extraWritableDirs)
+func wrapCommandWithSandbox(ctx context.Context, cmd *exec.Cmd, extraWritableDirs, readableDenylist []string) *exec.Cmd {
+	bwrapArgs := buildSandboxArgs(cmd.Dir, extraWritableDirs, readableDenylist)
 	bwrapArgs = append(bwrapArgs, "--", cmd.Path)
 	bwrapArgs = append(bwrapArgs, cmd.Args[1:]...)
 
@@ -1894,7 +1988,7 @@ func wrapCommandWithSandbox(ctx context.Context, cmd *exec.Cmd, extraWritableDir
 }
 
 // buildSandboxArgs constructs the bubblewrap arguments for filesystem isolation.
-func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string {
+func buildSandboxArgs(workspaceDir string, extraWritableDirs, readableDenylist []string) []string {
 	homeDir, _ := os.UserHomeDir()
 
 	var args []string
@@ -1948,6 +2042,10 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string 
 	// is inside /tmp (which it is during eval for isolation).
 	args = append(args, "--bind", workspaceDir, workspaceDir)
 
+	// Mask sensitive host directories (read-only by default) with empty tmpfs
+	// mounts so agents cannot read hidden tests, prior eval outputs, or sessions.
+	args = appendSandboxDenylistMasks(args, workspaceDir, readableDenylist)
+
 	// Required virtual filesystems.
 	args = append(args, "--dev", "/dev")
 	args = append(args, "--proc", "/proc")
@@ -1962,6 +2060,40 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs []string) []string 
 	args = append(args, "--chdir", workspaceDir)
 
 	return args
+}
+
+func appendSandboxDenylistMasks(args []string, workspaceDir string, readableDenylist []string) []string {
+	workspaceAbs, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		return args
+	}
+
+	for _, rawPath := range readableDenylist {
+		if rawPath == "" {
+			continue
+		}
+
+		denyPath, err := normalizeDenylistPath(rawPath)
+		if err != nil {
+			continue
+		}
+		if denyPath == workspaceAbs {
+			continue
+		}
+		if _, err := os.Stat(denyPath); err != nil {
+			continue
+		}
+		args = append(args, "--tmpfs", denyPath)
+	}
+
+	return args
+}
+
+func normalizeDenylistPath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	return filepath.Abs(path)
 }
 
 // getOpenCodeConfigPaths returns the possible paths for the OpenCode config file.
@@ -2350,14 +2482,20 @@ type LeaderboardSubmission struct {
 	ResultsHash    string `json:"results_hash"`
 
 	// Configuration
-	Timeout            int  `json:"timeout"`
-	Parallel           int  `json:"parallel"`
-	UseMCPTools        bool `json:"use_mcp_tools"`
-	DisableMCP         bool `json:"disable_mcp"`
-	Sandbox            bool `json:"sandbox"`
-	Legacy             bool `json:"legacy"`
-	QuotaAffectedTasks int  `json:"quota_affected_tasks"`
-	TotalQuotaRetries  int  `json:"total_quota_retries"`
+	Timeout                         int  `json:"timeout"`
+	Parallel                        int  `json:"parallel"`
+	UseMCPTools                     bool `json:"use_mcp_tools"`
+	DisableMCP                      bool `json:"disable_mcp"`
+	Sandbox                         bool `json:"sandbox"`
+	Legacy                          bool `json:"legacy"`
+	QuotaAffectedTasks              int  `json:"quota_affected_tasks"`
+	TotalQuotaRetries               int  `json:"total_quota_retries"`
+	TotalSelfTestCommands           int  `json:"total_self_test_commands"`
+	TotalToolchainInstallAttempts   int  `json:"total_toolchain_install_attempts"`
+	TotalOutOfWorkspaceReadAttempts int  `json:"total_out_of_workspace_read_attempts"`
+	TasksWithSelfTesting            int  `json:"tasks_with_self_testing"`
+	TasksWithToolchainInstall       int  `json:"tasks_with_toolchain_install"`
+	TasksWithOutOfWorkspaceReads    int  `json:"tasks_with_out_of_workspace_reads"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -2371,29 +2509,35 @@ type LeaderboardLanguageStats struct {
 // generateLeaderboardSubmission creates a compact submission file for leaderboard websites.
 func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttestation) LeaderboardSubmission {
 	submission := LeaderboardSubmission{
-		Agent:               summary.Agent,
-		Model:               summary.Model,
-		Reasoning:           summary.Reasoning,
-		Timestamp:           summary.Timestamp,
-		PassRate:            summary.PassRate,
-		WeightedPassRate:    summary.WeightedPassRate,
-		Passed:              summary.Passed,
-		Failed:              summary.Failed,
-		Total:               summary.Total,
-		WeightedScore:       summary.WeightedScore,
-		MaxPossibleScore:    summary.MaxPossibleScore,
-		IntegrityViolations: summary.IntegrityViolations,
-		TotalDurationSec:    summary.Duration,
-		AgentDurationSec:    summary.AgentTime,
-		Timeout:             summary.Timeout,
-		Parallel:            summary.Parallel,
-		UseMCPTools:         summary.UseMCPTools,
-		DisableMCP:          summary.DisableMCP,
-		Sandbox:             summary.Sandbox,
-		Legacy:              summary.Legacy,
-		QuotaAffectedTasks:  summary.QuotaAffectedTasks,
-		TotalQuotaRetries:   summary.TotalQuotaRetries,
-		ByLanguage:          make(map[string]LeaderboardLanguageStats),
+		Agent:                           summary.Agent,
+		Model:                           summary.Model,
+		Reasoning:                       summary.Reasoning,
+		Timestamp:                       summary.Timestamp,
+		PassRate:                        summary.PassRate,
+		WeightedPassRate:                summary.WeightedPassRate,
+		Passed:                          summary.Passed,
+		Failed:                          summary.Failed,
+		Total:                           summary.Total,
+		WeightedScore:                   summary.WeightedScore,
+		MaxPossibleScore:                summary.MaxPossibleScore,
+		IntegrityViolations:             summary.IntegrityViolations,
+		TotalDurationSec:                summary.Duration,
+		AgentDurationSec:                summary.AgentTime,
+		Timeout:                         summary.Timeout,
+		Parallel:                        summary.Parallel,
+		UseMCPTools:                     summary.UseMCPTools,
+		DisableMCP:                      summary.DisableMCP,
+		Sandbox:                         summary.Sandbox,
+		Legacy:                          summary.Legacy,
+		QuotaAffectedTasks:              summary.QuotaAffectedTasks,
+		TotalQuotaRetries:               summary.TotalQuotaRetries,
+		TotalSelfTestCommands:           summary.TotalSelfTestCommands,
+		TotalToolchainInstallAttempts:   summary.TotalToolchainInstallAttempts,
+		TotalOutOfWorkspaceReadAttempts: summary.TotalOutOfWorkspaceReadAttempts,
+		TasksWithSelfTesting:            summary.TasksWithSelfTesting,
+		TasksWithToolchainInstall:       summary.TasksWithToolchainInstall,
+		TasksWithOutOfWorkspaceReads:    summary.TasksWithOutOfWorkspaceReads,
+		ByLanguage:                      make(map[string]LeaderboardLanguageStats),
 	}
 
 	// Add verification data from attestation
@@ -2424,6 +2568,7 @@ func generateEvalReport(summary EvalSummary, attestation *EvalAttestation) strin
 	sb.WriteString("# Evaluation Report\n\n")
 	writeReportSummary(&sb, summary)
 	writeReportQuality(&sb, summary)
+	writeReportBehaviorTelemetry(&sb, summary)
 	writeReportByLanguage(&sb, summary)
 	writeReportByTier(&sb, summary)
 	writeReportTaskResults(&sb, summary)
@@ -2470,6 +2615,45 @@ func writeReportQuality(sb *strings.Builder, summary EvalSummary) {
 	sb.WriteString("## Quality Breakdown\n\n")
 	fmt.Fprintf(sb, "- **Integrity Violations** (modified test files): %d\n", summary.IntegrityViolations)
 	fmt.Fprintf(sb, "- **Failures**: %d\n", summary.Failed-summary.IntegrityViolations)
+	sb.WriteString("\n")
+}
+
+func writeReportBehaviorTelemetry(sb *strings.Builder, summary EvalSummary) {
+	sb.WriteString("## Behavior Telemetry\n\n")
+	fmt.Fprintf(sb, "- **Total self-test commands**: %d\n", summary.TotalSelfTestCommands)
+	fmt.Fprintf(sb, "- **Tasks with self-testing**: %d/%d\n", summary.TasksWithSelfTesting, summary.Total)
+	fmt.Fprintf(sb, "- **Total toolchain install attempts**: %d\n", summary.TotalToolchainInstallAttempts)
+	fmt.Fprintf(sb, "- **Tasks with toolchain install attempts**: %d/%d\n", summary.TasksWithToolchainInstall, summary.Total)
+	fmt.Fprintf(sb, "- **Total out-of-workspace read attempts**: %d\n", summary.TotalOutOfWorkspaceReadAttempts)
+	fmt.Fprintf(sb, "- **Tasks with out-of-workspace read attempts**: %d/%d\n", summary.TasksWithOutOfWorkspaceReads, summary.Total)
+
+	hasTaskRows := false
+	for _, r := range summary.Results {
+		if r.SelfTestCommands > 0 || r.ToolchainInstallAttempts > 0 || r.OutOfWorkspaceReadAttempts > 0 {
+			hasTaskRows = true
+			break
+		}
+	}
+	if !hasTaskRows {
+		sb.WriteString("\n")
+		return
+	}
+
+	sb.WriteString("\n| Task | Self Tests | Tool Installs | Out-of-Workspace Reads |\n")
+	sb.WriteString("|------|------------|---------------|-------------------------|\n")
+	for _, r := range summary.Results {
+		if r.SelfTestCommands == 0 && r.ToolchainInstallAttempts == 0 && r.OutOfWorkspaceReadAttempts == 0 {
+			continue
+		}
+		fmt.Fprintf(
+			sb,
+			"| %s | %d | %d | %d |\n",
+			r.Task,
+			r.SelfTestCommands,
+			r.ToolchainInstallAttempts,
+			r.OutOfWorkspaceReadAttempts,
+		)
+	}
 	sb.WriteString("\n")
 }
 
@@ -2561,6 +2745,77 @@ func writeReportVerification(sb *strings.Builder, attestation *EvalAttestation) 
 	sb.WriteString("\n")
 }
 
+func parseAgentBehaviorMetrics(logPath string) agentBehaviorMetrics {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return agentBehaviorMetrics{}
+	}
+	content := string(data)
+	return agentBehaviorMetrics{
+		SelfTestCommands:         countMatchingLines(content, selfTestCommandPatterns),
+		ToolchainInstallAttempts: countMatchingLines(content, toolchainInstallPatterns),
+		OutOfWorkspaceReads:      countMatchingLines(content, outOfWorkspaceReadPatterns),
+	}
+}
+
+func countMatchingLines(content string, patterns []*regexp.Regexp) int {
+	if content == "" {
+		return 0
+	}
+	lines := strings.Split(content, "\n")
+	count := 0
+	for _, line := range lines {
+		for _, re := range patterns {
+			if re.MatchString(line) {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+func resolveSandboxDenylistPaths(configured []string, outputDir string) []string {
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+
+	candidates := []string{
+		filepath.Join(repoRoot, "tasks"),
+		filepath.Join(repoRoot, "eval-results"),
+		filepath.Join(repoRoot, "sessions"),
+	}
+	if outputDir != "" {
+		candidates = append(candidates, outputDir)
+	}
+	for _, path := range configured {
+		if path == "" {
+			continue
+		}
+		if filepath.IsAbs(path) {
+			candidates = append(candidates, path)
+			continue
+		}
+		candidates = append(candidates, filepath.Join(repoRoot, path))
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	denylist := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if _, exists := seen[absPath]; exists {
+			continue
+		}
+		seen[absPath] = struct{}{}
+		denylist = append(denylist, absPath)
+	}
+	return denylist
+}
+
 // detectQuotaError checks if agent log contains rate limit or quota errors.
 // Returns (hasError, isRecoverable) where hasError indicates if any quota/rate
 // limit pattern was found, and isRecoverable indicates if the error is transient.
@@ -2643,6 +2898,9 @@ func isInfraFailure(logPath, workspaceDir string, workspaceReadyAt time.Time) bo
 			continue
 		}
 		if bytes.HasPrefix(trimmed, []byte("=== RETRY ")) && bytes.HasSuffix(trimmed, []byte("===")) {
+			continue
+		}
+		if bytes.HasPrefix(trimmed, []byte("HARNESS: agent timed out")) {
 			continue
 		}
 		meaningful = append(meaningful, trimmed...)

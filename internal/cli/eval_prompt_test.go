@@ -38,9 +38,18 @@ func TestBuildAgentPromptIncludesKeyInfo(t *testing.T) {
 		"Difficulty:",
 		"Stub/solution files: demo.go",
 		"Test files:          demo_test.go",
+		"You may run local tests/commands in the workspace while iterating.",
 	} {
 		if !strings.Contains(prompt, s) {
 			t.Fatalf("prompt missing %q\n\nPrompt:\n%s", s, prompt)
+		}
+	}
+	for _, forbidden := range []string{
+		"You do NOT need to run tests yourself.",
+		"Do NOT search for or install language toolchains/SDKs.",
+	} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("prompt should not include %q\n\nPrompt:\n%s", forbidden, prompt)
 		}
 	}
 
@@ -883,6 +892,17 @@ func TestIsInfraFailure(t *testing.T) {
 			wantFailure: false,
 		},
 		{
+			name:        "only harness timeout footer",
+			logContent:  "\n\nHARNESS: agent timed out (attempt=1 timeout_seconds=240.000 duration_seconds=240.000)\n",
+			wantFailure: true,
+		},
+		{
+			name:        "harness timeout footer but files written",
+			logContent:  "\n\nHARNESS: agent timed out (attempt=1 timeout_seconds=240.000 duration_seconds=240.000)\n",
+			writeFiles:  true,
+			wantFailure: false,
+		},
+		{
 			name:          "empty log with only agent.log in workspace (harness-created)",
 			logContent:    "",
 			writeAgentLog: true,
@@ -935,7 +955,7 @@ func TestBuildSandboxArgs(t *testing.T) {
 	t.Parallel()
 
 	workspaceDir := t.TempDir()
-	args := buildSandboxArgs(workspaceDir, nil)
+	args := buildSandboxArgs(workspaceDir, nil, nil)
 
 	// Verify required arguments are present.
 	assertContainsArg := func(flag, value string) {
@@ -999,7 +1019,7 @@ func TestWrapCommandWithSandbox(t *testing.T) {
 	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, "test")
 	cmd.Dir = workspaceDir
 
-	wrapped := wrapCommandWithSandbox(ctx, cmd, nil)
+	wrapped := wrapCommandWithSandbox(ctx, cmd, nil, nil)
 
 	// The wrapped command should use bwrap.
 	if !strings.HasSuffix(wrapped.Path, "bwrap") {
@@ -1035,5 +1055,113 @@ func TestWrapCommandWithSandbox(t *testing.T) {
 	// Environment should be preserved.
 	if !reflect.DeepEqual(wrapped.Env, cmd.Env) {
 		t.Error("expected environment to be preserved in wrapped command")
+	}
+}
+
+func TestBuildSandboxArgsMasksDenylistedDirs(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	denyDir := filepath.Join(t.TempDir(), "tasks")
+	if err := os.MkdirAll(denyDir, 0o755); err != nil {
+		t.Fatalf("mkdir deny dir: %v", err)
+	}
+
+	args := buildSandboxArgs(workspaceDir, nil, []string{denyDir, filepath.Join(t.TempDir(), "missing")})
+
+	foundMask := false
+	for i, arg := range args {
+		if arg == "--tmpfs" && i+1 < len(args) && args[i+1] == denyDir {
+			foundMask = true
+			break
+		}
+	}
+	if !foundMask {
+		t.Fatalf("expected denylisted directory %s to be masked via --tmpfs", denyDir)
+	}
+}
+
+func TestResolveSandboxDenylistPaths(t *testing.T) {
+	origDir, _ := os.Getwd()
+	repoRoot := t.TempDir()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	absolutePath := filepath.Join(t.TempDir(), "absolute-secret")
+	got := resolveSandboxDenylistPaths([]string{"custom-dir", absolutePath}, "")
+
+	want := []string{
+		filepath.Join(repoRoot, "tasks"),
+		filepath.Join(repoRoot, "eval-results"),
+		filepath.Join(repoRoot, "sessions"),
+		filepath.Join(repoRoot, "custom-dir"),
+		absolutePath,
+	}
+
+	for _, expected := range want {
+		found := false
+		for _, path := range got {
+			if path == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected denylist to include %s, got %v", expected, got)
+		}
+	}
+}
+
+func TestResolveSandboxDenylistPathsIncludesOutputDir(t *testing.T) {
+	t.Parallel()
+
+	origDir, _ := os.Getwd()
+	repoRoot := t.TempDir()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	outputDir := filepath.Join(t.TempDir(), "custom-output")
+	got := resolveSandboxDenylistPaths(nil, outputDir)
+
+	found := false
+	for _, path := range got {
+		if path == outputDir {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected denylist to include output dir %s, got %v", outputDir, got)
+	}
+}
+
+func TestParseAgentBehaviorMetrics(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	content := strings.Join([]string{
+		"$ go test ./...",
+		"$ cargo test",
+		"$ curl -sL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar xJ",
+		"$ find / -name zig -type f 2>/dev/null | head -5",
+		"/home/user/project/eval-results/old-run",
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	metrics := parseAgentBehaviorMetrics(logPath)
+	if metrics.SelfTestCommands != 2 {
+		t.Fatalf("self test commands = %d, want 2", metrics.SelfTestCommands)
+	}
+	if metrics.ToolchainInstallAttempts != 1 {
+		t.Fatalf("toolchain install attempts = %d, want 1", metrics.ToolchainInstallAttempts)
+	}
+	if metrics.OutOfWorkspaceReads != 2 {
+		t.Fatalf("out-of-workspace reads = %d, want 2", metrics.OutOfWorkspaceReads)
 	}
 }

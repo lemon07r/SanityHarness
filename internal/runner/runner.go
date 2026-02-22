@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/mount"
@@ -305,7 +306,8 @@ func (r *Runner) runSingle(ctx context.Context, t *task.Task, containerID string
 
 	execResult, err := r.docker.Exec(ctx, containerID, cmd, "/workspace", time.Duration(opts.Timeout)*time.Second)
 	if err != nil {
-		session.Status = result.StatusError
+		recordExecErrorAttempt(session, summarizer, execResult)
+		setSessionStatusFromExecError(session, err)
 		return fmt.Errorf("executing validation: %w", err)
 	}
 
@@ -383,7 +385,8 @@ func (r *Runner) runAttempt(ctx context.Context, t *task.Task, containerID strin
 
 	execResult, err := r.docker.Exec(ctx, containerID, cmd, "/workspace", time.Duration(opts.Timeout)*time.Second)
 	if err != nil {
-		session.Status = result.StatusTimeout
+		recordExecErrorAttempt(session, summarizer, execResult)
+		setSessionStatusFromExecError(session, err)
 		return fmt.Errorf("executing validation: %w", err)
 	}
 
@@ -394,6 +397,25 @@ func (r *Runner) runAttempt(ctx context.Context, t *task.Task, containerID strin
 	fmt.Print(result.FormatTerminal(session, session.LastAttempt(), true))
 
 	return nil
+}
+
+func setSessionStatusFromExecError(session *result.Session, runErr error) {
+	if session == nil {
+		return
+	}
+	if runErr != nil && strings.Contains(strings.ToLower(runErr.Error()), "timed out") {
+		session.Status = result.StatusTimeout
+		return
+	}
+	session.Status = result.StatusError
+}
+
+func recordExecErrorAttempt(session *result.Session, summarizer *errsummary.Summarizer, execResult *ExecResult) {
+	if session == nil || summarizer == nil || execResult == nil {
+		return
+	}
+	errorSummary := summarizer.Summarize(execResult.Combined)
+	session.AddAttempt(execResult.ExitCode, execResult.Duration, execResult.Combined, errorSummary)
 }
 
 // ensureWorkspace creates the workspace directory and copies task files.

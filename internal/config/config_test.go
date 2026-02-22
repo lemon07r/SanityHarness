@@ -22,6 +22,9 @@ func TestDefault(t *testing.T) {
 	if Default.Docker.AutoPull != true {
 		t.Error("default auto pull should be true")
 	}
+	if len(Default.Sandbox.ReadableDenylist) != 0 {
+		t.Errorf("default readable denylist = %v, want empty", Default.Sandbox.ReadableDenylist)
+	}
 }
 
 func TestLoadNoFile(t *testing.T) {
@@ -59,7 +62,11 @@ max_attempts = 10
 [docker]
 go_image = "custom-go:latest"
 auto_pull = false
-`
+
+[sandbox]
+writable_dirs = ["go"]
+readable_denylist = ["tasks", "/tmp/secret"]
+	`
 	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
@@ -83,6 +90,14 @@ auto_pull = false
 	}
 	if cfg.Docker.AutoPull != false {
 		t.Error("auto pull should be false")
+	}
+	if len(cfg.Sandbox.WritableDirs) != 1 || cfg.Sandbox.WritableDirs[0] != "go" {
+		t.Errorf("sandbox writable dirs = %v, want [go]", cfg.Sandbox.WritableDirs)
+	}
+	if len(cfg.Sandbox.ReadableDenylist) != 2 ||
+		cfg.Sandbox.ReadableDenylist[0] != "tasks" ||
+		cfg.Sandbox.ReadableDenylist[1] != "/tmp/secret" {
+		t.Errorf("sandbox readable denylist = %v, want [tasks /tmp/secret]", cfg.Sandbox.ReadableDenylist)
 	}
 }
 

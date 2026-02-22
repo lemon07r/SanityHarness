@@ -174,7 +174,8 @@ type HarnessConfig struct {
 
 // SandboxConfig contains bubblewrap sandbox settings.
 type SandboxConfig struct {
-	WritableDirs []string `toml:"writable_dirs"` // Additional $HOME-relative dirs to mount writable
+	WritableDirs     []string `toml:"writable_dirs"`     // Additional $HOME-relative dirs to mount writable
+	ReadableDenylist []string `toml:"readable_denylist"` // Repo-relative or absolute paths to hide from agents
 }
 
 // DockerConfig contains Docker-related settings.

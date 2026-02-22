@@ -14,24 +14,30 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 	t.Parallel()
 
 	summary := EvalSummary{
-		Agent:              "codex",
-		Model:              "gpt-5",
-		Timestamp:          "2026-02-22T010203",
-		PassRate:           50.0,
-		WeightedPassRate:   49.0,
-		Passed:             13,
-		Failed:             13,
-		Total:              26,
-		WeightedScore:      10.5,
-		MaxPossibleScore:   20.5,
-		Timeout:            600,
-		Parallel:           4,
-		UseMCPTools:        false,
-		DisableMCP:         false,
-		Sandbox:            false,
-		Legacy:             false,
-		QuotaAffectedTasks: 0,
-		TotalQuotaRetries:  0,
+		Agent:                           "codex",
+		Model:                           "gpt-5",
+		Timestamp:                       "2026-02-22T010203",
+		PassRate:                        50.0,
+		WeightedPassRate:                49.0,
+		Passed:                          13,
+		Failed:                          13,
+		Total:                           26,
+		WeightedScore:                   10.5,
+		MaxPossibleScore:                20.5,
+		Timeout:                         600,
+		Parallel:                        4,
+		UseMCPTools:                     false,
+		DisableMCP:                      false,
+		Sandbox:                         false,
+		Legacy:                          false,
+		QuotaAffectedTasks:              0,
+		TotalQuotaRetries:               0,
+		TotalSelfTestCommands:           17,
+		TotalToolchainInstallAttempts:   2,
+		TotalOutOfWorkspaceReadAttempts: 3,
+		TasksWithSelfTesting:            9,
+		TasksWithToolchainInstall:       1,
+		TasksWithOutOfWorkspaceReads:    2,
 		ByLanguage: map[string]EvalAggregate{
 			"go": {Passed: 3, Failed: 3, Total: 6, PassRate: 50.0},
 		},
@@ -50,6 +56,24 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 	}
 	if submission.TotalQuotaRetries != 0 {
 		t.Fatalf("total_quota_retries = %d, want 0", submission.TotalQuotaRetries)
+	}
+	if submission.TotalSelfTestCommands != 17 {
+		t.Fatalf("total_self_test_commands = %d, want 17", submission.TotalSelfTestCommands)
+	}
+	if submission.TotalToolchainInstallAttempts != 2 {
+		t.Fatalf("total_toolchain_install_attempts = %d, want 2", submission.TotalToolchainInstallAttempts)
+	}
+	if submission.TotalOutOfWorkspaceReadAttempts != 3 {
+		t.Fatalf("total_out_of_workspace_read_attempts = %d, want 3", submission.TotalOutOfWorkspaceReadAttempts)
+	}
+	if submission.TasksWithSelfTesting != 9 {
+		t.Fatalf("tasks_with_self_testing = %d, want 9", submission.TasksWithSelfTesting)
+	}
+	if submission.TasksWithToolchainInstall != 1 {
+		t.Fatalf("tasks_with_toolchain_install = %d, want 1", submission.TasksWithToolchainInstall)
+	}
+	if submission.TasksWithOutOfWorkspaceReads != 2 {
+		t.Fatalf("tasks_with_out_of_workspace_reads = %d, want 2", submission.TasksWithOutOfWorkspaceReads)
 	}
 }
 
@@ -92,21 +116,27 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 	t.Parallel()
 
 	summary := EvalSummary{
-		Agent:              "codex",
-		Timestamp:          "2026-02-22T010203",
-		Timeout:            600,
-		Parallel:           1,
-		Results:            []EvalResult{},
-		Passed:             0,
-		Failed:             0,
-		Total:              0,
-		PassRate:           0,
-		UseMCPTools:        false,
-		DisableMCP:         false,
-		Sandbox:            false,
-		Legacy:             false,
-		QuotaAffectedTasks: 0,
-		TotalQuotaRetries:  0,
+		Agent:                           "codex",
+		Timestamp:                       "2026-02-22T010203",
+		Timeout:                         600,
+		Parallel:                        1,
+		Results:                         []EvalResult{},
+		Passed:                          0,
+		Failed:                          0,
+		Total:                           0,
+		PassRate:                        0,
+		UseMCPTools:                     false,
+		DisableMCP:                      false,
+		Sandbox:                         false,
+		Legacy:                          false,
+		QuotaAffectedTasks:              0,
+		TotalQuotaRetries:               0,
+		TotalSelfTestCommands:           0,
+		TotalToolchainInstallAttempts:   0,
+		TotalOutOfWorkspaceReadAttempts: 0,
+		TasksWithSelfTesting:            0,
+		TasksWithToolchainInstall:       0,
+		TasksWithOutOfWorkspaceReads:    0,
 	}
 
 	data, err := json.Marshal(summary)
@@ -124,6 +154,12 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		`"legacy":false`,
 		`"quota_affected_tasks":0`,
 		`"total_quota_retries":0`,
+		`"total_self_test_commands":0`,
+		`"total_toolchain_install_attempts":0`,
+		`"total_out_of_workspace_read_attempts":0`,
+		`"tasks_with_self_testing":0`,
+		`"tasks_with_toolchain_install":0`,
+		`"tasks_with_out_of_workspace_reads":0`,
 	} {
 		if !strings.Contains(got, field) {
 			t.Fatalf("expected summary json to include %s, got: %s", field, got)
