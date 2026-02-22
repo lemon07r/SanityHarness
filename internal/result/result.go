@@ -173,13 +173,13 @@ func (s *Session) Save(baseDir string) error {
 func (s *Session) GenerateMarkdown() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("# SanityHarness Report: %s\n\n", s.TaskSlug))
-	sb.WriteString(fmt.Sprintf("**Status:** %s %s\n\n", StatusEmoji[s.Status], strings.ToUpper(string(s.Status))))
-	sb.WriteString(fmt.Sprintf("**Language:** %s\n\n", s.Language))
-	sb.WriteString(fmt.Sprintf("**Started:** %s\n\n", s.StartedAt.Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("**Completed:** %s\n\n", s.CompletedAt.Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("**Total Time:** %s\n\n", s.TotalTime.Round(time.Millisecond)))
-	sb.WriteString(fmt.Sprintf("**Attempts:** %d/%d\n\n", len(s.Attempts), s.Config.MaxAttempts))
+	fmt.Fprintf(&sb, "# SanityHarness Report: %s\n\n", s.TaskSlug)
+	fmt.Fprintf(&sb, "**Status:** %s %s\n\n", StatusEmoji[s.Status], strings.ToUpper(string(s.Status)))
+	fmt.Fprintf(&sb, "**Language:** %s\n\n", s.Language)
+	fmt.Fprintf(&sb, "**Started:** %s\n\n", s.StartedAt.Format(time.RFC3339))
+	fmt.Fprintf(&sb, "**Completed:** %s\n\n", s.CompletedAt.Format(time.RFC3339))
+	fmt.Fprintf(&sb, "**Total Time:** %s\n\n", s.TotalTime.Round(time.Millisecond))
+	fmt.Fprintf(&sb, "**Attempts:** %d/%d\n\n", len(s.Attempts), s.Config.MaxAttempts)
 
 	sb.WriteString("---\n\n")
 	sb.WriteString("## Attempts\n\n")
@@ -190,15 +190,15 @@ func (s *Session) GenerateMarkdown() string {
 			status = "✅ PASS"
 		}
 
-		sb.WriteString(fmt.Sprintf("### Attempt %d - %s\n\n", attempt.Number, status))
-		sb.WriteString(fmt.Sprintf("- **Exit Code:** %d\n", attempt.ExitCode))
-		sb.WriteString(fmt.Sprintf("- **Duration:** %s\n", attempt.Duration.Round(time.Millisecond)))
-		sb.WriteString(fmt.Sprintf("- **Time:** %s\n\n", attempt.Timestamp.Format(time.RFC3339)))
+		fmt.Fprintf(&sb, "### Attempt %d - %s\n\n", attempt.Number, status)
+		fmt.Fprintf(&sb, "- **Exit Code:** %d\n", attempt.ExitCode)
+		fmt.Fprintf(&sb, "- **Duration:** %s\n", attempt.Duration.Round(time.Millisecond))
+		fmt.Fprintf(&sb, "- **Time:** %s\n\n", attempt.Timestamp.Format(time.RFC3339))
 
 		if len(attempt.ErrorSummary) > 0 {
 			sb.WriteString("**Error Summary:**\n\n")
 			for _, err := range attempt.ErrorSummary {
-				sb.WriteString(fmt.Sprintf("- %s\n", err))
+				fmt.Fprintf(&sb, "- %s\n", err)
 			}
 			sb.WriteString("\n")
 		}
@@ -210,10 +210,10 @@ func (s *Session) GenerateMarkdown() string {
 
 	sb.WriteString("---\n\n")
 	sb.WriteString("## Configuration\n\n")
-	sb.WriteString(fmt.Sprintf("- **Timeout:** %ds\n", s.Config.Timeout))
-	sb.WriteString(fmt.Sprintf("- **Max Attempts:** %d\n", s.Config.MaxAttempts))
-	sb.WriteString(fmt.Sprintf("- **Watch Mode:** %v\n", s.Config.WatchMode))
-	sb.WriteString(fmt.Sprintf("- **Image:** %s\n", s.Config.Image))
+	fmt.Fprintf(&sb, "- **Timeout:** %ds\n", s.Config.Timeout)
+	fmt.Fprintf(&sb, "- **Max Attempts:** %d\n", s.Config.MaxAttempts)
+	fmt.Fprintf(&sb, "- **Watch Mode:** %v\n", s.Config.WatchMode)
+	fmt.Fprintf(&sb, "- **Image:** %s\n", s.Config.Image)
 
 	return sb.String()
 }
@@ -229,22 +229,21 @@ func FormatTerminal(session *Session, attempt *Attempt, watchMode bool) string {
 	// Header
 	sb.WriteString("\n")
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	sb.WriteString(fmt.Sprintf(" SANITY HARNESS                    %s (%s)\n",
-		session.TaskSlug, session.Language))
+	fmt.Fprintf(&sb, " SANITY HARNESS                    %s (%s)\n", session.TaskSlug, session.Language)
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	sb.WriteString("\n")
 
 	// Attempt info
-	sb.WriteString(fmt.Sprintf(" Attempt %d/%d                                    ⏱  %s\n",
+	fmt.Fprintf(&sb, " Attempt %d/%d                                    ⏱  %s\n",
 		attempt.Number, session.Config.MaxAttempts,
-		attempt.Duration.Round(time.Millisecond)))
+		attempt.Duration.Round(time.Millisecond))
 	sb.WriteString(" ─────────────────────────────────────────────────────────\n")
 
 	// Status
 	if attempt.Passed {
 		sb.WriteString(" ✓ PASS\n")
 	} else {
-		sb.WriteString(fmt.Sprintf(" ✗ FAIL (exit code %d)\n", attempt.ExitCode))
+		fmt.Fprintf(&sb, " ✗ FAIL (exit code %d)\n", attempt.ExitCode)
 	}
 	sb.WriteString("\n")
 
@@ -252,7 +251,7 @@ func FormatTerminal(session *Session, attempt *Attempt, watchMode bool) string {
 	if len(attempt.ErrorSummary) > 0 && !attempt.Passed {
 		sb.WriteString(" Error Summary:\n")
 		for _, err := range attempt.ErrorSummary {
-			sb.WriteString(fmt.Sprintf("   • %s\n", err))
+			fmt.Fprintf(&sb, "   • %s\n", err)
 		}
 		sb.WriteString("\n")
 	}
@@ -280,14 +279,14 @@ func FormatFinalResult(session *Session) string {
 	if session.Passed() {
 		sb.WriteString(" ✓ PASSED\n")
 	} else {
-		sb.WriteString(fmt.Sprintf(" ✗ %s\n", strings.ToUpper(string(session.Status))))
+		fmt.Fprintf(&sb, " ✗ %s\n", strings.ToUpper(string(session.Status)))
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf(" Task:      %s\n", session.TaskSlug))
-	sb.WriteString(fmt.Sprintf(" Attempts:  %d\n", len(session.Attempts)))
-	sb.WriteString(fmt.Sprintf(" Duration:  %s\n", session.TotalTime.Round(time.Millisecond)))
-	sb.WriteString(fmt.Sprintf(" Session:   %s\n", session.ID))
+	fmt.Fprintf(&sb, " Task:      %s\n", session.TaskSlug)
+	fmt.Fprintf(&sb, " Attempts:  %d\n", len(session.Attempts))
+	fmt.Fprintf(&sb, " Duration:  %s\n", session.TotalTime.Round(time.Millisecond))
+	fmt.Fprintf(&sb, " Session:   %s\n", session.ID)
 	sb.WriteString("\n")
 
 	return sb.String()

@@ -109,51 +109,20 @@ func (d *DockerClient) EnsureImage(ctx context.Context, imageName string, autoPu
 		return err
 	}
 
-	if exists {
-		compatible, localPlatform, err := d.imageMatchesHostPlatform(ctx, imageName)
-		if err != nil {
-			return err
-		}
-		if compatible {
-			return nil
-		}
-
+	if !exists {
 		if !autoPull {
-			return fmt.Errorf(
-				"image %s is %s but host platform is %s and auto-pull is disabled",
-				imageName,
-				localPlatform,
-				hostPlatformString(),
-			)
+			return fmt.Errorf("image %s not found locally and auto-pull is disabled", imageName)
 		}
 
 		if err := d.PullImage(ctx, imageName); err != nil {
 			return err
 		}
 
-		compatible, localPlatform, err = d.imageMatchesHostPlatform(ctx, imageName)
-		if err != nil {
-			return err
-		}
-		if compatible {
-			return nil
-		}
-
-		return fmt.Errorf(
-			"image %s is %s but host platform is %s; build or publish a %s image, or override this image in config",
+		return d.ensureImageMatchesHostPlatform(
+			ctx,
 			imageName,
-			localPlatform,
-			hostPlatformString(),
-			hostPlatformString(),
+			"image %s resolved to %s but host platform is %s; build or publish a %s image, or override this image in config",
 		)
-	}
-
-	if !autoPull {
-		return fmt.Errorf("image %s not found locally and auto-pull is disabled", imageName)
-	}
-
-	if err := d.PullImage(ctx, imageName); err != nil {
-		return err
 	}
 
 	compatible, localPlatform, err := d.imageMatchesHostPlatform(ctx, imageName)
@@ -164,12 +133,23 @@ func (d *DockerClient) EnsureImage(ctx context.Context, imageName string, autoPu
 		return nil
 	}
 
-	return fmt.Errorf(
-		"image %s resolved to %s but host platform is %s; build or publish a %s image, or override this image in config",
+	if !autoPull {
+		return fmt.Errorf(
+			"image %s is %s but host platform is %s and auto-pull is disabled",
+			imageName,
+			localPlatform,
+			hostPlatformString(),
+		)
+	}
+
+	if err := d.PullImage(ctx, imageName); err != nil {
+		return err
+	}
+
+	return d.ensureImageMatchesHostPlatform(
+		ctx,
 		imageName,
-		localPlatform,
-		hostPlatformString(),
-		hostPlatformString(),
+		"image %s is %s but host platform is %s; build or publish a %s image, or override this image in config",
 	)
 }
 
@@ -376,6 +356,24 @@ func (d *DockerClient) imageMatchesHostPlatform(ctx context.Context, imageName s
 
 	localPlatform := platformString(inspect.Os, inspect.Architecture)
 	return localPlatform == hostPlatformString(), localPlatform, nil
+}
+
+func (d *DockerClient) ensureImageMatchesHostPlatform(ctx context.Context, imageName, messageFormat string) error {
+	compatible, localPlatform, err := d.imageMatchesHostPlatform(ctx, imageName)
+	if err != nil {
+		return err
+	}
+	if compatible {
+		return nil
+	}
+
+	return fmt.Errorf(
+		messageFormat,
+		imageName,
+		localPlatform,
+		hostPlatformString(),
+		hostPlatformString(),
+	)
 }
 
 func platformString(osName, arch string) string {
