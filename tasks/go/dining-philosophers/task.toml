@@ -12,4 +12,4 @@ support = ["go.mod.txt"]
 
 [validation]
 command = "go"
-args = ["test", "-race", "-v", "-timeout", "30s", "./..."]
+args = ["test", "-count=1", "-race", "-v", "-timeout", "30s", "./..."]

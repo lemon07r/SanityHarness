@@ -142,8 +142,8 @@ type EvalResult struct {
 	Tier           string            `json:"tier,omitempty"`
 	Difficulty     string            `json:"difficulty,omitempty"`
 	Passed         bool              `json:"passed"`
-	AgentTimedOut  bool              `json:"agent_timed_out,omitempty"`
-	Status         task.ResultStatus `json:"status,omitempty"`
+	AgentTimedOut  bool              `json:"agent_timed_out"`
+	Status         task.ResultStatus `json:"status"`
 	Attempts       int               `json:"attempts"`
 	Duration       float64           `json:"duration_seconds"`
 	AgentTime      float64           `json:"agent_duration_seconds,omitempty"`
@@ -152,9 +152,9 @@ type EvalResult struct {
 	Error          string            `json:"error,omitempty"`
 	Weight         float64           `json:"weight,omitempty"`
 	WeightedScore  float64           `json:"weighted_score,omitempty"`
-	QuotaRetries   int               `json:"quota_retries,omitempty"`
-	QuotaExhausted bool              `json:"quota_exhausted,omitempty"`
-	InfraFailure   bool              `json:"infra_failure,omitempty"`
+	QuotaRetries   int               `json:"quota_retries"`
+	QuotaExhausted bool              `json:"quota_exhausted"`
+	InfraFailure   bool              `json:"infra_failure"`
 	WorkspaceDir   string            `json:"-"` // Not serialized, used for cleanup
 }
 
@@ -177,7 +177,8 @@ type EvalSummary struct {
 	Timestamp           string                   `json:"timestamp"`
 	Tier                string                   `json:"tier,omitempty"`
 	Difficulty          string                   `json:"difficulty,omitempty"`
-	Parallel            int                      `json:"parallel,omitempty"`
+	Timeout             int                      `json:"timeout"`
+	Parallel            int                      `json:"parallel"`
 	Results             []EvalResult             `json:"results"`
 	Passed              int                      `json:"passed"`
 	Failed              int                      `json:"failed"`
@@ -194,12 +195,12 @@ type EvalSummary struct {
 	ByLanguage          map[string]EvalAggregate `json:"by_language,omitempty"`
 	ByTier              map[string]EvalAggregate `json:"by_tier,omitempty"`
 	ByDifficulty        map[string]EvalAggregate `json:"by_difficulty,omitempty"`
-	UseMCPTools         bool                     `json:"use_mcp_tools,omitempty"`
-	DisableMCP          bool                     `json:"disable_mcp,omitempty"`
-	Sandbox             bool                     `json:"sandbox,omitempty"`
-	Legacy              bool                     `json:"legacy,omitempty"`
-	QuotaAffectedTasks  int                      `json:"quota_affected_tasks,omitempty"`
-	TotalQuotaRetries   int                      `json:"total_quota_retries,omitempty"`
+	UseMCPTools         bool                     `json:"use_mcp_tools"`
+	DisableMCP          bool                     `json:"disable_mcp"`
+	Sandbox             bool                     `json:"sandbox"`
+	Legacy              bool                     `json:"legacy"`
+	QuotaAffectedTasks  int                      `json:"quota_affected_tasks"`
+	TotalQuotaRetries   int                      `json:"total_quota_retries"`
 }
 
 // RunSpec defines a single eval run's configuration.
@@ -236,11 +237,11 @@ type RunConfig struct {
 	Tasks          string   `json:"tasks,omitempty"`
 	Timeout        int      `json:"timeout"`
 	Parallel       int      `json:"parallel"`
-	UseMCPTools    bool     `json:"use_mcp_tools,omitempty"`
-	DisableMCP     bool     `json:"disable_mcp,omitempty"`
-	NoSandbox      bool     `json:"no_sandbox,omitempty"`
-	Legacy         bool     `json:"legacy,omitempty"`
-	KeepWorkspaces bool     `json:"keep_workspaces,omitempty"`
+	UseMCPTools    bool     `json:"use_mcp_tools"`
+	DisableMCP     bool     `json:"disable_mcp"`
+	NoSandbox      bool     `json:"no_sandbox"`
+	Legacy         bool     `json:"legacy"`
+	KeepWorkspaces bool     `json:"keep_workspaces"`
 	TaskList       []string `json:"task_list"`
 	CreatedAt      string   `json:"created_at"`
 }
@@ -1116,6 +1117,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		Timestamp:           timestamp,
 		Tier:                shared.Tier,
 		Difficulty:          shared.Difficulty,
+		Timeout:             shared.Timeout,
 		Parallel:            parallel,
 		Results:             results,
 		Passed:              passed,
@@ -1349,6 +1351,11 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 			validationCmd = append(validationCmd, task.StripTxtExtension(filename))
 		}
 	}
+	effectiveValidationCmd := t.ValidationCommand()
+	if len(validationCmd) > 0 {
+		effectiveValidationCmd = validationCmd
+	}
+	validationLogPath := filepath.Join(taskOutputDir, "validation.log")
 
 	validateStart := time.Now()
 	session, err := r.Run(ctx, runner.RunOptions{
@@ -1361,6 +1368,8 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	result.ValidateTime = time.Since(validateStart).Seconds()
 
 	if err != nil {
+		timedOut := strings.Contains(strings.ToLower(err.Error()), "timed out")
+		writeValidationLog(validationLogPath, "", effectiveValidationCmd, -1, time.Duration(result.ValidateTime*float64(time.Second)), timedOut, err)
 		result.Error = err.Error()
 		return result
 	}
@@ -1371,8 +1380,9 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	// Save validation output to validation.log
 	if len(session.Attempts) > 0 {
 		lastAttempt := session.Attempts[len(session.Attempts)-1]
-		validationLogPath := filepath.Join(taskOutputDir, "validation.log")
-		_ = os.WriteFile(validationLogPath, []byte(lastAttempt.RawOutput), 0644)
+		writeValidationLog(validationLogPath, lastAttempt.RawOutput, effectiveValidationCmd, lastAttempt.ExitCode, lastAttempt.Duration, lastAttempt.ExitCode == -1, nil)
+	} else {
+		writeValidationLog(validationLogPath, "", effectiveValidationCmd, -1, 0, false, nil)
 	}
 
 	return result
@@ -1552,6 +1562,7 @@ func runAgentAttempt(
 	if errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
 		result.timedOut = true
 		logger.Debug("agent timed out", "timeout", agentTimeout)
+		writeAgentTimeoutFooter(logFile, attempt, agentTimeout, time.Since(agentStart))
 	}
 	if agentErr != nil {
 		logger.Debug("agent returned error", "error", agentErr)
@@ -1579,6 +1590,47 @@ func openAgentLogFile(agentLogPath string, attempt int) *os.File {
 		return nil
 	}
 	return logFile
+}
+
+// writeAgentTimeoutFooter appends deterministic timeout evidence to the agent log.
+func writeAgentTimeoutFooter(logFile *os.File, attempt int, timeout, runDuration time.Duration) {
+	if logFile == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(
+		logFile,
+		"\n\nHARNESS: agent timed out (attempt=%d timeout_seconds=%.3f duration_seconds=%.3f)\n",
+		attempt+1,
+		timeout.Seconds(),
+		runDuration.Seconds(),
+	)
+	_ = logFile.Sync()
+}
+
+// writeValidationLog persists validation output with a machine-readable footer.
+func writeValidationLog(path, rawOutput string, command []string, exitCode int, duration time.Duration, timedOut bool, runErr error) {
+	var sb strings.Builder
+	if rawOutput != "" {
+		sb.WriteString(rawOutput)
+		if !strings.HasSuffix(rawOutput, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	fmt.Fprintf(
+		&sb,
+		"HARNESS: validation command=%q exit_code=%d duration_seconds=%.3f timed_out=%t\n",
+		strings.Join(command, " "),
+		exitCode,
+		duration.Seconds(),
+		timedOut,
+	)
+	if runErr != nil {
+		fmt.Fprintf(&sb, "HARNESS: validation run_error=%q\n", runErr.Error())
+	}
+
+	_ = os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
 // toolchainInfo returns a human-readable toolchain description for the given language.
@@ -2298,10 +2350,14 @@ type LeaderboardSubmission struct {
 	ResultsHash    string `json:"results_hash"`
 
 	// Configuration
-	UseMCPTools bool `json:"use_mcp_tools,omitempty"`
-	DisableMCP  bool `json:"disable_mcp,omitempty"`
-	Sandbox     bool `json:"sandbox,omitempty"`
-	Legacy      bool `json:"legacy,omitempty"`
+	Timeout            int  `json:"timeout"`
+	Parallel           int  `json:"parallel"`
+	UseMCPTools        bool `json:"use_mcp_tools"`
+	DisableMCP         bool `json:"disable_mcp"`
+	Sandbox            bool `json:"sandbox"`
+	Legacy             bool `json:"legacy"`
+	QuotaAffectedTasks int  `json:"quota_affected_tasks"`
+	TotalQuotaRetries  int  `json:"total_quota_retries"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -2329,6 +2385,14 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		IntegrityViolations: summary.IntegrityViolations,
 		TotalDurationSec:    summary.Duration,
 		AgentDurationSec:    summary.AgentTime,
+		Timeout:             summary.Timeout,
+		Parallel:            summary.Parallel,
+		UseMCPTools:         summary.UseMCPTools,
+		DisableMCP:          summary.DisableMCP,
+		Sandbox:             summary.Sandbox,
+		Legacy:              summary.Legacy,
+		QuotaAffectedTasks:  summary.QuotaAffectedTasks,
+		TotalQuotaRetries:   summary.TotalQuotaRetries,
 		ByLanguage:          make(map[string]LeaderboardLanguageStats),
 	}
 
@@ -2339,12 +2403,6 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		submission.TasksHash = attestation.Integrity.TasksHash
 		submission.ResultsHash = attestation.Integrity.ResultsHash
 	}
-
-	// Add configuration flags
-	submission.UseMCPTools = summary.UseMCPTools
-	submission.DisableMCP = summary.DisableMCP
-	submission.Sandbox = summary.Sandbox
-	submission.Legacy = summary.Legacy
 
 	// Convert language stats
 	for lang, agg := range summary.ByLanguage {

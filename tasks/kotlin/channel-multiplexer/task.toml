@@ -14,4 +14,4 @@ support = ["build.gradle.kts", "settings.gradle.kts"]
 
 [validation]
 command = "gradle"
-args = ["test", "--no-daemon", "-q"]
+args = ["test", "--no-daemon", "--console=plain"]

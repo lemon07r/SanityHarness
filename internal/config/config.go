@@ -192,7 +192,7 @@ type DockerConfig struct {
 var Default = Config{
 	Harness: HarnessConfig{
 		SessionDir:     "./sessions",
-		DefaultTimeout: 120,
+		DefaultTimeout: 600,
 		MaxAttempts:    5,
 		OutputFormat:   "all",
 	},

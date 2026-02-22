@@ -14,4 +14,4 @@ support = ["go.mod.txt"]
 
 [validation]
 command = "go"
-args = ["test", "-race", "-v", "./..."]
+args = ["test", "-count=1", "-race", "-v", "./..."]

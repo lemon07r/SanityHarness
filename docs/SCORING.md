@@ -144,8 +144,10 @@ eval-results/<agent>-<timestamp>/
 ├── attestation.json   # BLAKE3 hashes for verification
 ├── report.md          # Human-readable Markdown report
 ├── submission.json    # Compact format for leaderboard
+├── run-config.json    # Original run configuration (resume + audit)
 └── <lang>-<slug>/
-    └── agent.log      # Agent output (preserved even if workspace cleaned)
+    ├── agent.log      # Agent output (includes HARNESS timeout footer on agent timeout)
+    └── validation.log # Validation output (always includes HARNESS footer)
 ```
 
 ### summary.json Schema
@@ -197,6 +199,11 @@ eval-results/<agent>-<timestamp>/
   ]
 }
 ```
+
+Notes:
+- `timeout`, `parallel`, `use_mcp_tools`, `disable_mcp`, `sandbox`, `legacy`,
+  `quota_affected_tasks`, and `total_quota_retries` are always emitted.
+- Per-task `results[]` include explicit retry/infra metadata fields.
 
 ### attestation.json Schema
 
@@ -260,6 +267,12 @@ Optimized for leaderboard submissions:
   "results_hash": "blake3:..."
 }
 ```
+
+Notes:
+- `submission.json` includes run metadata and audit counters:
+  `timeout`, `parallel`, `quota_affected_tasks`, and `total_quota_retries`.
+- Configuration booleans (`use_mcp_tools`, `disable_mcp`, `sandbox`, `legacy`)
+  are always emitted as explicit booleans.
 
 ### report.md Format
 

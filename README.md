@@ -255,8 +255,8 @@ eval-results/<agent>-<timestamp>/
 ├── submission.json    # Leaderboard format
 ├── run-config.json    # Config for resume capability
 └── <task>/
-    ├── agent.log      # Agent output during task execution
-    └── validation.log # Test runner output from validation
+    ├── agent.log      # Agent output during task execution (includes HARNESS timeout footer)
+    └── validation.log # Test runner output + HARNESS validation footer (always non-empty)
 ```
 
 **Resume interrupted evals:** If interrupted (CTRL+C), the harness saves partial results and prints a resume command. Use `./sanity eval --resume <dir>` to continue.
