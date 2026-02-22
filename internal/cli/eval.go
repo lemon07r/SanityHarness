@@ -2780,6 +2780,7 @@ func resolveSandboxDenylistPaths(configured []string, outputDir string) []string
 	if err != nil {
 		return nil
 	}
+	repoRoot = canonicalizeExistingPath(repoRoot)
 
 	candidates := []string{
 		filepath.Join(repoRoot, "tasks"),
@@ -2787,7 +2788,11 @@ func resolveSandboxDenylistPaths(configured []string, outputDir string) []string
 		filepath.Join(repoRoot, "sessions"),
 	}
 	if outputDir != "" {
-		candidates = append(candidates, outputDir)
+		if filepath.IsAbs(outputDir) {
+			candidates = append(candidates, outputDir)
+		} else {
+			candidates = append(candidates, filepath.Join(repoRoot, outputDir))
+		}
 	}
 	for _, path := range configured {
 		if path == "" {
@@ -2807,6 +2812,7 @@ func resolveSandboxDenylistPaths(configured []string, outputDir string) []string
 		if err != nil {
 			continue
 		}
+		absPath = canonicalizeExistingPath(absPath)
 		if _, exists := seen[absPath]; exists {
 			continue
 		}
@@ -2814,6 +2820,17 @@ func resolveSandboxDenylistPaths(configured []string, outputDir string) []string
 		denylist = append(denylist, absPath)
 	}
 	return denylist
+}
+
+func canonicalizeExistingPath(path string) string {
+	if path == "" {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }
 
 // detectQuotaError checks if agent log contains rate limit or quota errors.

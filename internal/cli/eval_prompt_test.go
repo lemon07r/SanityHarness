@@ -1115,8 +1115,6 @@ func TestResolveSandboxDenylistPaths(t *testing.T) {
 }
 
 func TestResolveSandboxDenylistPathsIncludesOutputDir(t *testing.T) {
-	t.Parallel()
-
 	origDir, _ := os.Getwd()
 	repoRoot := t.TempDir()
 	if err := os.Chdir(repoRoot); err != nil {
@@ -1136,6 +1134,42 @@ func TestResolveSandboxDenylistPathsIncludesOutputDir(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected denylist to include output dir %s, got %v", outputDir, got)
+	}
+}
+
+func TestResolveSandboxDenylistPathsCanonicalizesSymlinkRepoRoot(t *testing.T) {
+	origDir, _ := os.Getwd()
+	realRoot := t.TempDir()
+	aliasParent := t.TempDir()
+	aliasRoot := filepath.Join(aliasParent, "repo-alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	if err := os.Chdir(aliasRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("PWD", aliasRoot)
+	defer func() { _ = os.Chdir(origDir) }()
+
+	got := resolveSandboxDenylistPaths(nil, "")
+	want := filepath.Join(realRoot, "tasks")
+	unwanted := filepath.Join(aliasRoot, "tasks")
+
+	hasWant := false
+	hasUnwanted := false
+	for _, path := range got {
+		if path == want {
+			hasWant = true
+		}
+		if path == unwanted {
+			hasUnwanted = true
+		}
+	}
+	if !hasWant {
+		t.Fatalf("expected canonical denylist path %s, got %v", want, got)
+	}
+	if hasUnwanted {
+		t.Fatalf("unexpected symlink denylist path %s in %v", unwanted, got)
 	}
 }
 
