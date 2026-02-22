@@ -110,14 +110,67 @@ func (d *DockerClient) EnsureImage(ctx context.Context, imageName string, autoPu
 	}
 
 	if exists {
-		return nil
+		compatible, localPlatform, err := d.imageMatchesHostPlatform(ctx, imageName)
+		if err != nil {
+			return err
+		}
+		if compatible {
+			return nil
+		}
+
+		if !autoPull {
+			return fmt.Errorf(
+				"image %s is %s but host platform is %s and auto-pull is disabled",
+				imageName,
+				localPlatform,
+				hostPlatformString(),
+			)
+		}
+
+		if err := d.PullImage(ctx, imageName); err != nil {
+			return err
+		}
+
+		compatible, localPlatform, err = d.imageMatchesHostPlatform(ctx, imageName)
+		if err != nil {
+			return err
+		}
+		if compatible {
+			return nil
+		}
+
+		return fmt.Errorf(
+			"image %s is %s but host platform is %s; build or publish a %s image, or override this image in config",
+			imageName,
+			localPlatform,
+			hostPlatformString(),
+			hostPlatformString(),
+		)
 	}
 
 	if !autoPull {
 		return fmt.Errorf("image %s not found locally and auto-pull is disabled", imageName)
 	}
 
-	return d.PullImage(ctx, imageName)
+	if err := d.PullImage(ctx, imageName); err != nil {
+		return err
+	}
+
+	compatible, localPlatform, err := d.imageMatchesHostPlatform(ctx, imageName)
+	if err != nil {
+		return err
+	}
+	if compatible {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"image %s resolved to %s but host platform is %s; build or publish a %s image, or override this image in config",
+		imageName,
+		localPlatform,
+		hostPlatformString(),
+		hostPlatformString(),
+	)
 }
 
 // ContainerConfig holds configuration for creating a container.
@@ -313,4 +366,24 @@ func hostPlatform() *ocispec.Platform {
 // hostPlatformString returns the platform string (e.g. "linux/arm64") for image pulls.
 func hostPlatformString() string {
 	return "linux/" + runtime.GOARCH
+}
+
+func (d *DockerClient) imageMatchesHostPlatform(ctx context.Context, imageName string) (bool, string, error) {
+	inspect, err := d.client.ImageInspect(ctx, imageName)
+	if err != nil {
+		return false, "", fmt.Errorf("inspecting image %s: %w", imageName, err)
+	}
+
+	localPlatform := platformString(inspect.Os, inspect.Architecture)
+	return localPlatform == hostPlatformString(), localPlatform, nil
+}
+
+func platformString(osName, arch string) string {
+	if osName == "" {
+		osName = "unknown"
+	}
+	if arch == "" {
+		arch = "unknown"
+	}
+	return osName + "/" + arch
 }

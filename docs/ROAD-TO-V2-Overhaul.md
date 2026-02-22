@@ -88,6 +88,18 @@ Multi-run directories use a `multi-run.json` config and `multi-run-state.json` f
 
 Phase 5 (parallel runs with `--parallel-runs`) is deferred to a future release.
 
+## What changed in v1.8.0-alpha.3 — ARM readiness
+
+This pre-release focuses on making the harness reliable on `arm64` hosts while keeping behavior explicit when image architecture is mismatched.
+
+- **Early image platform validation in the runner.** `EnsureImage` now inspects the local/pulled image platform and fails fast with a clear error if the image does not match the host architecture, instead of failing later at container create/run time.
+- **Zig container is now architecture-aware.** The Zig Dockerfile now selects the correct upstream tarball for `amd64` (`x86_64`) and `arm64` (`aarch64`) builds.
+- **Docker image publishing now includes both Linux architectures.** The Docker workflow now builds and pushes `linux/amd64` and `linux/arm64` images for all six runtime images (`go`, `rust`, `typescript`, `kotlin`, `dart`, `zig`) using Buildx + QEMU.
+
+Operationally, this means ARM users get deterministic behavior:
+- either a matching image runs normally,
+- or the harness exits with an actionable platform mismatch message telling you to publish/build the needed architecture or override image config.
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:

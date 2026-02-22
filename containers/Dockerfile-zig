@@ -1,11 +1,18 @@
 FROM alpine:3.19
 
+ARG TARGETARCH
+
 # Install Zig 0.13.0
 RUN apk add --no-cache wget xz && \
-    wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -O /tmp/zig.tar.xz && \
+    case "${TARGETARCH}" in \
+      amd64) ZIG_ARCH="x86_64" ;; \
+      arm64) ZIG_ARCH="aarch64" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    wget -q "https://ziglang.org/download/0.13.0/zig-linux-${ZIG_ARCH}-0.13.0.tar.xz" -O /tmp/zig.tar.xz && \
     tar -xf /tmp/zig.tar.xz -C /opt && \
     rm /tmp/zig.tar.xz && \
-    ln -s /opt/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig
+    ln -s "/opt/zig-linux-${ZIG_ARCH}-0.13.0/zig" /usr/local/bin/zig
 
 # Configure Zig cache location
 ENV ZIG_GLOBAL_CACHE_DIR=/tmp/.zig-cache
