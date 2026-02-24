@@ -241,6 +241,7 @@ var Default = Config{
 			"go/bin",
 			".opencode/bin",
 			".bun/bin",
+			".npm-global",
 		},
 	},
 }

@@ -910,11 +910,11 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 				}
 			}
 
-			// Clean up workspace unless --keep-workspaces is set
+			// Clean up workspace source files unless --keep-workspaces is set.
+			// The workspace dir is also the task output dir containing agent.log,
+			// validation.log, and integrity artifacts — those must be preserved.
 			if !shared.KeepWorkspaces && result.WorkspaceDir != "" {
-				if err := os.RemoveAll(result.WorkspaceDir); err != nil {
-					logger.Debug("failed to cleanup workspace", "dir", result.WorkspaceDir, "error", err)
-				}
+				cleanupWorkspaceFiles(result.WorkspaceDir)
 			}
 
 			fmt.Println()
@@ -1006,9 +1006,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 				}
 
 				if !shared.KeepWorkspaces && jr.r.WorkspaceDir != "" {
-					if err := os.RemoveAll(jr.r.WorkspaceDir); err != nil {
-						logger.Debug("failed to cleanup workspace", "dir", jr.r.WorkspaceDir, "error", err)
-					}
+					cleanupWorkspaceFiles(jr.r.WorkspaceDir)
 				}
 			}
 
@@ -1512,6 +1510,33 @@ func resolveAgentTimeout(timeoutSeconds, defaultSeconds, taskSeconds int) time.D
 		timeout = time.Duration(taskSeconds) * time.Second
 	}
 	return timeout
+}
+
+// evalOutputFiles lists files and directories produced by the harness in the
+// task output directory. These must be preserved when cleaning up workspace
+// source files after validation.
+var evalOutputFiles = map[string]bool{
+	"agent.log":       true,
+	"validation.log":  true,
+	"integrity.json":  true,
+	"integrity-files": true,
+	"integrity-diff":  true,
+}
+
+// cleanupWorkspaceFiles removes workspace source files from the task output
+// directory while preserving eval artifacts (agent.log, validation.log,
+// integrity files). The directory itself is kept.
+func cleanupWorkspaceFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if evalOutputFiles[e.Name()] {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+	}
 }
 
 func ensureEvalTaskOutputPaths(outputDir, workspaceName string) (taskOutputDir, agentLogPath, validationLogPath string, err error) {
@@ -2123,7 +2148,7 @@ RULES:
 		prompt += `
 
 MCP TOOLS:
-You have access to MCP tools. Carefully assess what they do and how they can be used as effectively as possible, then use them as proactively as you can wherever and whenever most suitable.`
+Before beginning work, review all available MCP tools, and assess their full capabilities. Factor them into your approach, and use them proactively as possible whenever and wherever is most suitable. You MUST use any of your MCP tools at least once to help complete the task.`
 		if mcpPrompt != "" {
 			prompt += "\n\nAGENT-SPECIFIC TOOLS:\n" + mcpPrompt
 		}
