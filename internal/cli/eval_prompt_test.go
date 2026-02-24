@@ -78,10 +78,10 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	// Test without MCP tools
 	promptWithoutMCP := buildAgentPrompt(tt, false, "")
 	for _, forbidden := range []string{
-		"You have access to MCP tools. Review what is available to you before starting work.",
-		"1. Use your MCP tools to help complete your task(s) wherever and whenever applicable.",
-		"Prefer your MCP tools over built-in alternatives if both can accomplish the same step or objective.",
-		"You MUST actively use your MCP tools to assist you with your work. Do NOT ignore them. Make your first MCP tool call before writing any code.",
+		"You have access to MCP server tools. Review what is available to you before starting work.",
+		"1. Use your MCP server tools to help complete your task(s) wherever and whenever applicable.",
+		"Prefer your MCP server tools over built-in alternatives if both can accomplish the same step or objective.",
+		"You MUST actively use your MCP server tools to assist you with your work. Do NOT ignore them. Make your first MCP server tool call before writing any code.",
 		"MCP TOOLS:",
 		"AGENT-SPECIFIC TOOLS:",
 	} {
@@ -93,12 +93,12 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	// Test with MCP tools
 	promptWithMCP := buildAgentPrompt(tt, true, "agent-specific text should not appear")
 	for _, s := range []string{
-		"- You have access to MCP tools. Review what is available to you before starting work.",
-		"1. Use your MCP tools to help complete your task(s) wherever and whenever applicable.",
+		"- You have access to MCP server tools. Review what is available to you before starting work.",
+		"1. Use your MCP server tools to help complete your task(s) wherever and whenever applicable.",
 		"2. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).",
 		"6. Ensure thread-safety if the tests use concurrent operations.",
-		"- Prefer your MCP tools over built-in alternatives if both can accomplish the same step or objective.",
-		"- You MUST actively use your MCP tools to assist you with your work. Do NOT ignore them. Make your first MCP tool call before writing any code.",
+		"- Prefer your MCP server tools over built-in alternatives if both can accomplish the same step or objective.",
+		"- You MUST actively use your MCP server tools to assist you with your work. Do NOT ignore them. Make your first MCP server tool call before writing any code.",
 	} {
 		if !strings.Contains(promptWithMCP, s) {
 			t.Fatalf("prompt with MCP tools missing %q\n\nPrompt:\n%s", s, promptWithMCP)
@@ -177,7 +177,7 @@ func TestBuildAgentCommandDisableMCP(t *testing.T) {
 	ctx := context.Background()
 
 	// Test with disableMCP=true for opencode - should inject OPENCODE_CONFIG_CONTENT
-	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, "opencode")
+	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, false, "opencode")
 
 	found := false
 	for _, env := range cmd.Env {
@@ -197,19 +197,60 @@ func TestBuildAgentCommandDisableMCP(t *testing.T) {
 	}
 
 	// Test with disableMCP=true for non-opencode agent - should not inject
-	cmd2 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, "gemini")
+	cmd2 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, false, "gemini")
 	for _, env := range cmd2.Env {
 		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
 			t.Error("should not set OPENCODE_CONFIG_CONTENT for non-opencode agents")
 		}
 	}
 
-	// Test with disableMCP=false for opencode - should not inject
-	cmd3 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, "opencode")
+	// Test with useMCPTools=true for opencode - should inject timeout override
+	cmd3 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, true, "opencode")
+	found = false
 	for _, env := range cmd3.Env {
 		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
-			t.Error("should not set OPENCODE_CONFIG_CONTENT when disableMCP=false")
+			found = true
+			if !strings.Contains(env, `"experimental"`) {
+				t.Error("expected experimental config in OPENCODE_CONFIG_CONTENT")
+			}
+			if !strings.Contains(env, `"mcp_timeout"`) {
+				t.Error("expected mcp_timeout in OPENCODE_CONFIG_CONTENT")
+			}
+			if !strings.Contains(env, "180000") {
+				t.Error("expected mcp_timeout to be set to 180000")
+			}
+			break
 		}
+	}
+	if !found {
+		t.Error("expected OPENCODE_CONFIG_CONTENT to be set when useMCPTools=true for opencode")
+	}
+
+	// Test with disableMCP=false and useMCPTools=false for opencode - should not inject
+	cmd4 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, false, "opencode")
+	for _, env := range cmd4.Env {
+		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
+			t.Error("should not set OPENCODE_CONFIG_CONTENT when disableMCP=false and useMCPTools=false")
+		}
+	}
+
+	// Test with disableMCP=true and useMCPTools=true for opencode - should include both overrides
+	cmd5 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, true, "opencode")
+	found = false
+	for _, env := range cmd5.Env {
+		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
+			found = true
+			if !strings.Contains(env, `"*_*":false`) {
+				t.Error("expected *_* glob pattern to disable MCP tools")
+			}
+			if !strings.Contains(env, `"mcp_timeout"`) {
+				t.Error("expected mcp_timeout in combined OPENCODE_CONFIG_CONTENT")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected OPENCODE_CONFIG_CONTENT to be set when both disableMCP and useMCPTools are true")
 	}
 }
 
@@ -347,6 +388,37 @@ func TestBuildOpenCodeMCPDisableConfig(t *testing.T) {
 	}
 }
 
+func TestBuildOpenCodeMCPConfigWithTimeout(t *testing.T) {
+	t.Parallel()
+
+	config := buildOpenCodeMCPConfig(false, true)
+	if !strings.Contains(config, `"experimental"`) {
+		t.Fatal("config should contain experimental key")
+	}
+	if !strings.Contains(config, `"mcp_timeout"`) {
+		t.Fatal("config should contain mcp_timeout")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(config), &parsed); err != nil {
+		t.Fatalf("config should be valid JSON: %v", err)
+	}
+
+	experimental, ok := parsed["experimental"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected experimental object, got: %T", parsed["experimental"])
+	}
+
+	timeout, ok := experimental["mcp_timeout"].(float64)
+	if !ok {
+		t.Fatalf("expected mcp_timeout number, got: %T", experimental["mcp_timeout"])
+	}
+
+	if int(timeout) != openCodeGlobalMCPTimeoutMS {
+		t.Fatalf("expected mcp_timeout=%d, got %d", openCodeGlobalMCPTimeoutMS, int(timeout))
+	}
+}
+
 func TestReadOpenCodeConfigWithTempFile(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv()
 
@@ -403,6 +475,7 @@ type agentCommandTestCase struct {
 	model        string
 	reasoning    string
 	disableMCP   bool
+	useMCPTools  bool
 	agentName    string
 	expectedArgs []string
 }
@@ -414,7 +487,16 @@ func runAgentCommandTestCases(t *testing.T, tests []agentCommandTestCase) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			cmd := buildAgentCommand(ctx, tc.agentCfg, tc.prompt, tc.model, tc.reasoning, tc.disableMCP, tc.agentName)
+			cmd := buildAgentCommand(
+				ctx,
+				tc.agentCfg,
+				tc.prompt,
+				tc.model,
+				tc.reasoning,
+				tc.disableMCP,
+				tc.useMCPTools,
+				tc.agentName,
+			)
 
 			// cmd.Args[0] is the command itself (e.g., "agent"), skip it for comparison
 			gotArgs := cmd.Args[1:]
@@ -1132,7 +1214,7 @@ func TestWrapCommandWithSandbox(t *testing.T) {
 		Args:    []string{"{prompt}"},
 	}
 
-	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, "test")
+	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, false, "test")
 	cmd.Dir = workspaceDir
 
 	wrapped := wrapCommandWithSandbox(ctx, cmd, nil, nil, nil, nil)

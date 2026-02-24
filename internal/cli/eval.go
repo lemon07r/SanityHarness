@@ -1951,7 +1951,7 @@ func runAgentAttempt(
 	agentCtx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
-	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, agent)
+	cmd := buildAgentCommand(agentCtx, agentCfg, prompt, model, evalReasoning, evalDisableMCP, evalUseMCPTools, agent)
 	cmd.Dir = workspaceDir
 
 	// Use /dev/null for stdin to prevent TTY issues with agents that use Ink/React
@@ -2118,15 +2118,15 @@ func buildAgentPrompt(t *task.Task, useMCPTools bool, mcpPrompt string) string {
 4. Ensure your solution handles edge cases and performance constraints.
 5. Ensure thread-safety if the tests use concurrent operations.`
 	if useMCPTools {
-		mcpEnvironmentLine = "\n- You have access to MCP tools. Review what is available to you before starting work."
-		taskInstructions = `1. Use your MCP tools to help complete your task(s) wherever and whenever applicable.
+		mcpEnvironmentLine = "\n- You have access to MCP server tools. Review what is available to you before starting work."
+		taskInstructions = `1. Use your MCP server tools to help complete your task(s) wherever and whenever applicable.
 2. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
 3. Read the visible test file(s) to understand expected behavior and edge cases.
 4. Implement the stub file(s), replacing placeholders with working code.
 5. Ensure your solution handles edge cases and performance constraints.
 6. Ensure thread-safety if the tests use concurrent operations.`
-		mcpImportantLine = "\n- Prefer your MCP tools over built-in alternatives if both can accomplish the same step or objective."
-		mcpRuleLine = "\n- You MUST actively use your MCP tools to assist you with your work. Do NOT ignore them. Make your first MCP tool call before writing any code."
+		mcpImportantLine = "\n- Prefer your MCP server tools over built-in alternatives if both can accomplish the same step or objective."
+		mcpRuleLine = "\n- You MUST actively use your MCP server tools to assist you with your work. Do NOT ignore them. Make your first MCP server tool call before writing any code."
 	}
 
 	prompt := fmt.Sprintf(`You are solving a coding task called "%s".
@@ -2406,8 +2406,14 @@ func copyDirContents(src, dst string) error {
 
 // buildAgentCommand creates an exec.Cmd for the given agent configuration.
 // It handles prompt placeholder substitution, model flag positioning, reasoning flag, and environment variables.
-// If disableMCP is true and the agent supports it, MCP tools will be disabled via environment variables.
-func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt, model, reasoning string, disableMCP bool, agentName string) *exec.Cmd {
+// For OpenCode, disableMCP disables MCP tools and useMCPTools raises the MCP request timeout.
+func buildAgentCommand(
+	ctx context.Context,
+	agentCfg *config.AgentConfig,
+	prompt, model, reasoning string,
+	disableMCP, useMCPTools bool,
+	agentName string,
+) *exec.Cmd {
 	var args []string
 
 	// Determine model flag position (default to "before")
@@ -2480,7 +2486,7 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 	}
 
 	cmd := exec.CommandContext(ctx, agentCfg.Command, args...)
-	cmd.Env = buildAgentEnv(agentCfg.Env, disableMCP, agentName)
+	cmd.Env = buildAgentEnv(agentCfg.Env, disableMCP, useMCPTools, agentName)
 
 	return cmd
 }
@@ -2861,43 +2867,64 @@ func deepMergeJSON(base, override map[string]any) map[string]any {
 	return result
 }
 
+const openCodeGlobalMCPTimeoutMS = 180000
+
 // buildOpenCodeMCPDisableConfig creates the OPENCODE_CONFIG_CONTENT value
 // by merging the user's existing config with the MCP disable settings.
 func buildOpenCodeMCPDisableConfig() string {
-	// The override config that disables all MCP tools
-	// MCP tools are registered as "servername_toolname", so "*_*" matches all
-	mcpDisable := map[string]any{
-		"tools": map[string]any{
+	return buildOpenCodeMCPConfig(true, false)
+}
+
+// buildOpenCodeMCPConfig creates the OPENCODE_CONFIG_CONTENT value with optional MCP settings.
+// It preserves the user's existing OpenCode config and applies runtime overrides.
+func buildOpenCodeMCPConfig(disableMCP, useMCPTools bool) string {
+	overrides := map[string]any{}
+
+	// MCP tools are registered as "servername_toolname", so "*_*" matches all.
+	if disableMCP {
+		overrides["tools"] = map[string]any{
 			"*_*": false,
-		},
+		}
 	}
 
-	// Try to read the user's existing config
+	// Increase global MCP timeout for tool-heavy runs.
+	if useMCPTools {
+		overrides["experimental"] = map[string]any{
+			"mcp_timeout": openCodeGlobalMCPTimeoutMS,
+		}
+	}
+
+	// Try to read the user's existing config.
 	userConfig := readOpenCodeConfig()
 
 	var finalConfig map[string]any
 	if userConfig != nil {
-		// Merge user config with MCP disable (MCP disable takes precedence)
-		finalConfig = deepMergeJSON(userConfig, mcpDisable)
+		// Merge user config with runtime overrides (runtime overrides take precedence).
+		finalConfig = deepMergeJSON(userConfig, overrides)
 	} else {
-		// No user config found, just use MCP disable
-		finalConfig = mcpDisable
+		finalConfig = overrides
 	}
 
-	// Serialize to JSON
+	// Serialize to JSON.
 	data, err := json.Marshal(finalConfig)
 	if err != nil {
-		// Fallback to minimal config if marshaling fails
-		return `{"tools":{"*_*":false}}`
+		if disableMCP && useMCPTools {
+			return `{"tools":{"*_*":false},"experimental":{"mcp_timeout":180000}}`
+		}
+		if disableMCP {
+			return `{"tools":{"*_*":false}}`
+		}
+		return `{"experimental":{"mcp_timeout":180000}}`
 	}
 
 	return string(data)
 }
 
 // buildAgentEnv creates the environment variable slice for an agent command.
-// It merges the agent's configured env vars with any runtime injections (like MCP disable).
-func buildAgentEnv(agentEnv map[string]string, disableMCP bool, agentName string) []string {
-	if len(agentEnv) == 0 && !disableMCP {
+// It merges the agent's configured env vars with any runtime injections.
+func buildAgentEnv(agentEnv map[string]string, disableMCP, useMCPTools bool, agentName string) []string {
+	needsOpenCodeConfig := agentName == "opencode" && (disableMCP || useMCPTools)
+	if len(agentEnv) == 0 && !needsOpenCodeConfig {
 		return nil
 	}
 
@@ -2906,11 +2933,9 @@ func buildAgentEnv(agentEnv map[string]string, disableMCP bool, agentName string
 		env = append(env, k+"="+v)
 	}
 
-	// Inject MCP disable config for OpenCode
-	// Merges user's existing config with the MCP disable settings to preserve
-	// custom models, plugins, and other configuration while disabling MCP tools
-	if disableMCP && agentName == "opencode" {
-		configContent := buildOpenCodeMCPDisableConfig()
+	// Inject OpenCode config overrides for MCP behavior.
+	if needsOpenCodeConfig {
+		configContent := buildOpenCodeMCPConfig(disableMCP, useMCPTools)
 		env = append(env, "OPENCODE_CONFIG_CONTENT="+configContent)
 	}
 
