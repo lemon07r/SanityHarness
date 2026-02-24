@@ -23,12 +23,12 @@ auto_pull = true            # automatically pull images if missing
 # $HOME is mounted read-only, with specific directories made writable so agents
 # can persist session data, auth tokens, and caches.
 #
-# All dot-directories (hidden dirs) under $HOME are automatically mounted
-# writable, so agent-specific dirs like .claude, .gemini, .junie, etc.
-# work without any configuration.
-#
-# Use writable_dirs only for non-dot directories that need write access:
+# shared_readwrite_dirs and shared_readonly_dirs are HOME-relative (or absolute)
+# allowlists for broad compatibility and least-privilege access.
+# writable_dirs remains an extra writable allowlist for custom paths.
 [sandbox]
+# shared_readwrite_dirs = [".config", ".cache", ".local/share", ".local/state"]
+# shared_readonly_dirs = ["bin", ".local/bin", "go/bin"]
 # writable_dirs = ["go", "my-tool-data"]
 # readable_denylist = ["tasks", "eval-results", "sessions"]
 

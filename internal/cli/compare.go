@@ -18,7 +18,7 @@ var compareCmd = &cobra.Command{
 comparison table showing pass rates, weighted scores, and per-task results.
 
 Supports glob patterns for convenient selection of multiple directories.`,
-	Example: `  sanity compare eval-results/gemini-* eval-results/codex-*
+	Example: `  sanity compare eval-results/*-gemini eval-results/*-codex
   sanity compare ./run-a ./run-b ./run-c
   sanity compare eval-results/multi-2026-02-21T024300/codex-gpt-5.2 eval-results/multi-2026-02-21T024300/opencode-kimi-k2.5`,
 	Args: cobra.MinimumNArgs(2),

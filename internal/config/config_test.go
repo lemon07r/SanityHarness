@@ -25,6 +25,12 @@ func TestDefault(t *testing.T) {
 	if len(Default.Sandbox.ReadableDenylist) != 0 {
 		t.Errorf("default readable denylist = %v, want empty", Default.Sandbox.ReadableDenylist)
 	}
+	if len(Default.Sandbox.SharedReadWriteDirs) == 0 {
+		t.Error("default shared_readwrite_dirs should not be empty")
+	}
+	if len(Default.Sandbox.SharedReadOnlyDirs) == 0 {
+		t.Error("default shared_readonly_dirs should not be empty")
+	}
 }
 
 func TestLoadNoFile(t *testing.T) {
@@ -66,7 +72,9 @@ auto_pull = false
 [sandbox]
 writable_dirs = ["go"]
 readable_denylist = ["tasks", "/tmp/secret"]
-	`
+shared_readwrite_dirs = [".config", ".cache", ".factory"]
+shared_readonly_dirs = [".local/bin", "bin"]
+		`
 	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
@@ -98,6 +106,17 @@ readable_denylist = ["tasks", "/tmp/secret"]
 		cfg.Sandbox.ReadableDenylist[0] != "tasks" ||
 		cfg.Sandbox.ReadableDenylist[1] != "/tmp/secret" {
 		t.Errorf("sandbox readable denylist = %v, want [tasks /tmp/secret]", cfg.Sandbox.ReadableDenylist)
+	}
+	if len(cfg.Sandbox.SharedReadWriteDirs) != 3 ||
+		cfg.Sandbox.SharedReadWriteDirs[0] != ".config" ||
+		cfg.Sandbox.SharedReadWriteDirs[1] != ".cache" ||
+		cfg.Sandbox.SharedReadWriteDirs[2] != ".factory" {
+		t.Errorf("sandbox shared readwrite dirs = %v, want [.config .cache .factory]", cfg.Sandbox.SharedReadWriteDirs)
+	}
+	if len(cfg.Sandbox.SharedReadOnlyDirs) != 2 ||
+		cfg.Sandbox.SharedReadOnlyDirs[0] != ".local/bin" ||
+		cfg.Sandbox.SharedReadOnlyDirs[1] != "bin" {
+		t.Errorf("sandbox shared readonly dirs = %v, want [.local/bin bin]", cfg.Sandbox.SharedReadOnlyDirs)
 	}
 }
 

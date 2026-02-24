@@ -62,7 +62,7 @@ sanity batch --config runs.toml [--parallel-runs N] [--repeat N]
 
 ```
 sanity compare <dir1> <dir2> [dir3...]
-sanity compare eval-results/gemini-* eval-results/codex-*
+sanity compare eval-results/*-gemini eval-results/*-codex
 ```
 
 ---
@@ -270,7 +270,7 @@ When `evalRepeat > 1` (or when multi-agent is active, Phase 2), `RunE` creates a
 ```go
 if evalRepeat > 1 || isMultiRun {
     // Create umbrella dir: eval-results/multi-<timestamp>/
-    // or eval-results/<agent>-<timestamp>/ for single-agent repeat
+    // or eval-results/<timestamp>-<agent>/ for single-agent repeat
     for i := 1; i <= evalRepeat; i++ {
         runDir := filepath.Join(umbrellaDir, fmt.Sprintf("run-%d", i))
         // For multi-agent: runDir = filepath.Join(umbrellaDir, fmt.Sprintf("%s-%s/run-%d", spec.Agent, spec.Model, i))
@@ -631,7 +631,7 @@ Not in initial implementation. When added:
 
 ```
 eval-results/
-  gemini-2026-02-21T024300/
+  2026-02-21T024300-gemini/
     summary.json, attestation.json, report.md, submission.json, run-config.json
     go-bank-account/
       agent.log, validation.log
@@ -641,7 +641,7 @@ eval-results/
 
 ```
 eval-results/
-  gemini-2026-02-21T024300/           # Umbrella dir
+  2026-02-21T024300-gemini/           # Umbrella dir
     multi-run-config.json
     multi-run-state.json
     repeat-stats.json
@@ -655,7 +655,7 @@ eval-results/
       summary.json, report.md, ...
 ```
 
-**Naming:** For single-agent repeat, the umbrella dir uses the normal `<agent>-<timestamp>` naming (not `multi-`), since it's conceptually one config repeated.
+**Naming:** For single-agent repeat, the umbrella dir uses the normal `<timestamp>-<agent>` naming (not `multi-`), since it's conceptually one config repeated.
 
 #### Multi-agent, `--repeat 1`
 

@@ -51,6 +51,8 @@ var (
 	evalLegacy          bool
 	evalSandboxActive   bool
 	evalSandboxDenylist []string
+	evalSandboxSharedRW []string
+	evalSandboxSharedRO []string
 	evalResume          string
 	evalRepeat          int
 )
@@ -334,7 +336,7 @@ Examples:
   sanity eval --agent claude --lang go
   sanity eval --agent my-custom-agent --tasks bank-account,react
   sanity eval --agent gemini --dry-run
-  sanity eval --resume ./eval-results/gemini-2026-01-19T192910`,
+  sanity eval --resume ./eval-results/2026-01-19T192910-gemini`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Apply config defaults for flags not explicitly set.
 		if !cmd.Flags().Changed("timeout") && evalTimeout == 0 {
@@ -603,6 +605,8 @@ Examples:
 		// Detect sandbox availability.
 		evalSandboxActive = initSandbox()
 		evalSandboxDenylist = resolveSandboxDenylistPaths(cfg.Sandbox.ReadableDenylist, evalOutputDir)
+		evalSandboxSharedRW = append([]string(nil), cfg.Sandbox.SharedReadWriteDirs...)
+		evalSandboxSharedRO = append([]string(nil), cfg.Sandbox.SharedReadOnlyDirs...)
 
 		// Protect the tasks/ directory from agent modification during eval.
 		if restoreFn, err := protectTasksDir(); err != nil {
@@ -622,7 +626,7 @@ Examples:
 				umbrellaDir = evalOutputDir
 			} else if len(specs) == 1 {
 				// Single-agent repeat: use normal naming.
-				umbrellaDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", specs[0].Agent, timestamp))
+				umbrellaDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", timestamp, specs[0].Agent))
 			} else {
 				umbrellaDir = filepath.Join("eval-results", fmt.Sprintf("multi-%s", timestamp))
 			}
@@ -685,7 +689,7 @@ Examples:
 
 		// Create output directory.
 		if evalOutputDir == "" {
-			evalOutputDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", spec.Agent, timestamp))
+			evalOutputDir = filepath.Join("eval-results", fmt.Sprintf("%s-%s", timestamp, spec.Agent))
 		}
 
 		_, _, err = evalRunSingle(
@@ -1300,6 +1304,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 
 }
 
+//nolint:gocognit // Coordinates end-to-end task execution flow in one place for readability.
 func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) (result EvalResult) {
 	start := time.Now()
 	weight := task.ComputeWeight(t)
@@ -1369,6 +1374,7 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 		return result
 	}
 	agentLogPath := filepath.Join(taskOutputDir, "agent.log")
+	validationLogPath := filepath.Join(taskOutputDir, "validation.log")
 
 	// Execute agent in the isolated temp workspace
 	workspaceReadyAt := time.Now()
@@ -1399,6 +1405,18 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	if len(modified) > 0 {
 		sort.Strings(modified)
 		result.Error = fmt.Sprintf("modified task files (disallowed): %s", strings.Join(modified, ", "))
+		if err := writeIntegrityViolationArtifacts(taskOutputDir, loader, t, agentWorkDir, modified, result.Error); err != nil {
+			logger.Warn("failed to write integrity artifacts", "task", t.ID(), "error", err)
+		}
+		writeValidationLog(
+			validationLogPath,
+			"",
+			t.ValidationCommand(),
+			-1,
+			0,
+			false,
+			errors.New("skipped due integrity violation"),
+		)
 		return result
 	}
 
@@ -1436,8 +1454,6 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	if len(validationCmd) > 0 {
 		effectiveValidationCmd = validationCmd
 	}
-	validationLogPath := filepath.Join(taskOutputDir, "validation.log")
-
 	validateStart := time.Now()
 	session, err := r.Run(ctx, runner.RunOptions{
 		Task:              t, // Pass task directly to avoid slug collision
@@ -1640,7 +1656,14 @@ func runAgentAttempt(
 		if cfg != nil {
 			extraDirs = cfg.Sandbox.WritableDirs
 		}
-		cmd = wrapCommandWithSandbox(agentCtx, cmd, extraDirs, evalSandboxDenylist)
+		cmd = wrapCommandWithSandbox(
+			agentCtx,
+			cmd,
+			extraDirs,
+			evalSandboxSharedRW,
+			evalSandboxSharedRO,
+			evalSandboxDenylist,
+		)
 	}
 
 	// Run agent in its own process group so we can kill the entire tree on
@@ -1830,6 +1853,165 @@ func detectModifiedTaskFiles(loader *task.Loader, t *task.Task, workspaceDir str
 	return modified, nil
 }
 
+type integrityArtifactReport struct {
+	Task      string                  `json:"task"`
+	Timestamp string                  `json:"timestamp"`
+	Reason    string                  `json:"reason"`
+	Files     []integrityArtifactFile `json:"files"`
+}
+
+type integrityArtifactFile struct {
+	Path             string `json:"path"`
+	CanonicalFile    string `json:"canonical_file,omitempty"`
+	ExpectedExists   bool   `json:"expected_exists"`
+	ActualExists     bool   `json:"actual_exists"`
+	ExpectedHash     string `json:"expected_hash,omitempty"`
+	ActualHash       string `json:"actual_hash,omitempty"`
+	ExpectedArtifact string `json:"expected_artifact,omitempty"`
+	ActualArtifact   string `json:"actual_artifact,omitempty"`
+	DiffArtifact     string `json:"diff_artifact,omitempty"`
+}
+
+//nolint:gocognit // Handles artifact generation across expected/actual/missing file combinations.
+func writeIntegrityViolationArtifacts(
+	taskOutputDir string,
+	loader *task.Loader,
+	t *task.Task,
+	workspaceDir string,
+	modified []string,
+	reason string,
+) error {
+	if err := os.MkdirAll(taskOutputDir, 0o755); err != nil {
+		return fmt.Errorf("creating task output dir: %w", err)
+	}
+
+	filesRoot := filepath.Join(taskOutputDir, "integrity-files")
+	diffRoot := filepath.Join(taskOutputDir, "integrity-diff")
+	if err := os.MkdirAll(filesRoot, 0o755); err != nil {
+		return fmt.Errorf("creating integrity files dir: %w", err)
+	}
+	if err := os.MkdirAll(diffRoot, 0o755); err != nil {
+		return fmt.Errorf("creating integrity diff dir: %w", err)
+	}
+
+	canonicalByWorkspace := make(map[string]string)
+	for _, filename := range append(append([]string{}, t.Files.Test...), t.Files.Support...) {
+		canonicalByWorkspace[task.StripTxtExtension(filename)] = filename
+	}
+
+	report := integrityArtifactReport{
+		Task:      t.ID(),
+		Timestamp: time.Now().Format(time.RFC3339),
+		Reason:    reason,
+		Files:     make([]integrityArtifactFile, 0, len(modified)),
+	}
+
+	for _, workspaceName := range modified {
+		canonicalName := canonicalByWorkspace[workspaceName]
+		entry := integrityArtifactFile{
+			Path:          workspaceName,
+			CanonicalFile: canonicalName,
+		}
+
+		expectedBytes := []byte(nil)
+		if canonicalName != "" {
+			content, err := loader.ReadTaskFile(t, canonicalName)
+			if err == nil {
+				expectedBytes = content
+				entry.ExpectedExists = true
+				entry.ExpectedHash = hashBytes(content)
+			}
+		}
+
+		actualPath := filepath.Join(workspaceDir, workspaceName)
+		actualBytes, err := os.ReadFile(actualPath)
+		if err == nil {
+			entry.ActualExists = true
+			entry.ActualHash = hashBytes(actualBytes)
+		}
+
+		expectedArtifactAbs := filepath.Join(filesRoot, workspaceName+".expected")
+		actualArtifactAbs := filepath.Join(filesRoot, workspaceName+".actual")
+		diffArtifactAbs := filepath.Join(diffRoot, workspaceName+".diff")
+
+		if entry.ExpectedExists {
+			if err := os.MkdirAll(filepath.Dir(expectedArtifactAbs), 0o755); err != nil {
+				return fmt.Errorf("creating expected artifact dir: %w", err)
+			}
+			if err := os.WriteFile(expectedArtifactAbs, expectedBytes, 0o644); err != nil {
+				return fmt.Errorf("writing expected artifact: %w", err)
+			}
+			if rel, err := filepath.Rel(taskOutputDir, expectedArtifactAbs); err == nil {
+				entry.ExpectedArtifact = filepath.ToSlash(rel)
+			}
+		}
+
+		if entry.ActualExists {
+			if err := os.MkdirAll(filepath.Dir(actualArtifactAbs), 0o755); err != nil {
+				return fmt.Errorf("creating actual artifact dir: %w", err)
+			}
+			if err := os.WriteFile(actualArtifactAbs, actualBytes, 0o644); err != nil {
+				return fmt.Errorf("writing actual artifact: %w", err)
+			}
+			if rel, err := filepath.Rel(taskOutputDir, actualArtifactAbs); err == nil {
+				entry.ActualArtifact = filepath.ToSlash(rel)
+			}
+		}
+
+		if err := os.MkdirAll(filepath.Dir(diffArtifactAbs), 0o755); err != nil {
+			return fmt.Errorf("creating diff artifact dir: %w", err)
+		}
+		diffContent := buildIntegrityDiffContent(expectedArtifactAbs, actualArtifactAbs, entry.ExpectedExists, entry.ActualExists)
+		if err := os.WriteFile(diffArtifactAbs, []byte(diffContent), 0o644); err != nil {
+			return fmt.Errorf("writing diff artifact: %w", err)
+		}
+		if rel, err := filepath.Rel(taskOutputDir, diffArtifactAbs); err == nil {
+			entry.DiffArtifact = filepath.ToSlash(rel)
+		}
+
+		report.Files = append(report.Files, entry)
+	}
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal integrity report: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(taskOutputDir, "integrity.json"), data, 0o644); err != nil {
+		return fmt.Errorf("writing integrity report: %w", err)
+	}
+
+	return nil
+}
+
+func buildIntegrityDiffContent(expectedPath, actualPath string, expectedExists, actualExists bool) string {
+	switch {
+	case expectedExists && actualExists:
+		cmd := exec.CommandContext(context.Background(), "diff", "-u", expectedPath, actualPath)
+		out, err := cmd.CombinedOutput()
+		if len(out) > 0 {
+			return string(out)
+		}
+		if err != nil {
+			return fmt.Sprintf("diff failed: %v\n", err)
+		}
+		return "no diff output (files may be identical)\n"
+	case expectedExists && !actualExists:
+		return fmt.Sprintf(
+			"--- %s\n+++ %s\n@@\n- expected file exists\n+ actual file missing\n",
+			filepath.ToSlash(expectedPath),
+			filepath.ToSlash(actualPath),
+		)
+	case !expectedExists && actualExists:
+		return fmt.Sprintf(
+			"--- %s\n+++ %s\n@@\n- expected file missing\n+ unexpected actual file exists\n",
+			filepath.ToSlash(expectedPath),
+			filepath.ToSlash(actualPath),
+		)
+	default:
+		return "both expected and actual files are missing\n"
+	}
+}
+
 func writeTaskFilesToWorkspace(loader *task.Loader, t *task.Task, workspaceDir string, files []string) error {
 	for _, filename := range files {
 		content, err := loader.ReadTaskFile(t, filename)
@@ -1973,8 +2155,19 @@ func buildAgentCommand(ctx context.Context, agentCfg *config.AgentConfig, prompt
 // The sandbox restricts filesystem access so the agent can only write to the
 // workspace directory and /tmp. The rest of the filesystem (including $HOME)
 // is mounted read-only. Network access is preserved for LLM API calls.
-func wrapCommandWithSandbox(ctx context.Context, cmd *exec.Cmd, extraWritableDirs, readableDenylist []string) *exec.Cmd {
-	bwrapArgs := buildSandboxArgs(cmd.Dir, extraWritableDirs, readableDenylist)
+func wrapCommandWithSandbox(
+	ctx context.Context,
+	cmd *exec.Cmd,
+	extraWritableDirs, sharedReadWriteDirs, sharedReadOnlyDirs, readableDenylist []string,
+) *exec.Cmd {
+	bwrapArgs := buildSandboxArgs(
+		cmd.Dir,
+		cmd.Path,
+		extraWritableDirs,
+		sharedReadWriteDirs,
+		sharedReadOnlyDirs,
+		readableDenylist,
+	)
 	bwrapArgs = append(bwrapArgs, "--", cmd.Path)
 	bwrapArgs = append(bwrapArgs, cmd.Args[1:]...)
 
@@ -1988,7 +2181,10 @@ func wrapCommandWithSandbox(ctx context.Context, cmd *exec.Cmd, extraWritableDir
 }
 
 // buildSandboxArgs constructs the bubblewrap arguments for filesystem isolation.
-func buildSandboxArgs(workspaceDir string, extraWritableDirs, readableDenylist []string) []string {
+func buildSandboxArgs(
+	workspaceDir, commandPath string,
+	extraWritableDirs, sharedReadWriteDirs, sharedReadOnlyDirs, readableDenylist []string,
+) []string {
 	homeDir, _ := os.UserHomeDir()
 
 	var args []string
@@ -2000,38 +2196,44 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs, readableDenylist [
 		}
 	}
 
-	// Mount $HOME read-only so agents can access their own configs and binaries.
+	// Mount $HOME read-only and expose an explicit broad shared allowlist below.
 	args = append(args, "--ro-bind", homeDir, homeDir)
 
-	// Allow agents to write to all dot-directories (hidden dirs) under $HOME.
-	// Instead of maintaining a per-agent whitelist, we enumerate existing
-	// dot-directories and mount them all writable. This covers XDG dirs
-	// (.cache, .config, .local), language toolchains (.npm, .cargo, .rustup),
-	// and any agent-specific directories (.claude, .gemini, .junie, etc.)
-	// without needing updates when new agents are added.
-	// Non-dot directories like "go" must still be listed explicitly.
-	explicitWritableDirs := make([]string, 0, 1+len(extraWritableDirs))
-	explicitWritableDirs = append(explicitWritableDirs, "go")
+	writableSpecs := make([]string, 0, len(sharedReadWriteDirs)+len(extraWritableDirs)+1)
+	writableSpecs = append(writableSpecs, sharedReadWriteDirs...)
+	// Backward compatible: writable_dirs remains an explicit additional writable allowlist.
+	writableSpecs = append(writableSpecs, extraWritableDirs...)
+	writableSpecs = append(writableSpecs, "go")
 
-	// Merge user-configured writable dirs from [sandbox] config.
-	explicitWritableDirs = append(explicitWritableDirs, extraWritableDirs...)
-
-	// Mount all existing dot-directories under $HOME as writable.
-	if entries, err := os.ReadDir(homeDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() && strings.HasPrefix(e.Name(), ".") {
-				absDir := filepath.Join(homeDir, e.Name())
-				args = append(args, "--bind", absDir, absDir)
-			}
-		}
+	readonlySpecs := make([]string, 0, len(sharedReadOnlyDirs)+1)
+	readonlySpecs = append(readonlySpecs, sharedReadOnlyDirs...)
+	if commandPath != "" {
+		readonlySpecs = append(readonlySpecs, filepath.Dir(commandPath))
 	}
 
-	// Mount explicitly listed non-dot directories.
-	for _, dir := range explicitWritableDirs {
-		absDir := filepath.Join(homeDir, dir)
-		if _, err := os.Stat(absDir); err == nil {
-			args = append(args, "--bind", absDir, absDir)
+	writablePaths := resolveSandboxMountPaths(homeDir, writableSpecs)
+	readonlyPaths := resolveSandboxMountPaths(homeDir, readonlySpecs)
+
+	writableSet := make(map[string]struct{}, len(writablePaths))
+	for _, absPath := range writablePaths {
+		if _, exists := writableSet[absPath]; exists {
+			continue
 		}
+		if _, err := os.Stat(absPath); err != nil {
+			continue
+		}
+		writableSet[absPath] = struct{}{}
+		args = append(args, "--bind", absPath, absPath)
+	}
+
+	for _, absPath := range readonlyPaths {
+		if _, writable := writableSet[absPath]; writable {
+			continue
+		}
+		if _, err := os.Stat(absPath); err != nil {
+			continue
+		}
+		args = append(args, "--ro-bind", absPath, absPath)
 	}
 
 	// /tmp for temporary files.
@@ -2042,8 +2244,14 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs, readableDenylist [
 	// is inside /tmp (which it is during eval for isolation).
 	args = append(args, "--bind", workspaceDir, workspaceDir)
 
-	// Mask sensitive host directories (read-only by default) with empty tmpfs
-	// mounts so agents cannot read hidden tests, prior eval outputs, or sessions.
+	// Mask non-allowlisted top-level home directories to prevent browsing unrelated
+	// host data while keeping configured shared directories accessible.
+	allowedTopLevel := collectAllowedHomeTopLevel(homeDir, append(writablePaths, readonlyPaths...))
+	args = appendSandboxHomeMasks(args, homeDir, workspaceDir, allowedTopLevel)
+
+	// Mask sensitive host directories with empty tmpfs mounts so agents cannot
+	// read hidden tests, prior eval outputs, or historical sessions.
+	readableDenylist = append(readableDenylist, defaultSandboxSensitiveHomeMasks(homeDir)...)
 	args = appendSandboxDenylistMasks(args, workspaceDir, readableDenylist)
 
 	// Required virtual filesystems.
@@ -2060,6 +2268,85 @@ func buildSandboxArgs(workspaceDir string, extraWritableDirs, readableDenylist [
 	args = append(args, "--chdir", workspaceDir)
 
 	return args
+}
+
+func resolveSandboxMountPaths(homeDir string, specs []string) []string {
+	seen := make(map[string]struct{}, len(specs))
+	paths := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+		absPath := spec
+		switch {
+		case spec == "~":
+			absPath = homeDir
+		case strings.HasPrefix(spec, "~/"):
+			absPath = filepath.Join(homeDir, strings.TrimPrefix(spec, "~/"))
+		case !filepath.IsAbs(spec):
+			absPath = filepath.Join(homeDir, spec)
+		}
+		absPath = canonicalizeExistingPath(absPath)
+		if _, exists := seen[absPath]; exists {
+			continue
+		}
+		seen[absPath] = struct{}{}
+		paths = append(paths, absPath)
+	}
+	return paths
+}
+
+func collectAllowedHomeTopLevel(homeDir string, mountedPaths []string) map[string]struct{} {
+	allowed := make(map[string]struct{})
+	for _, mounted := range mountedPaths {
+		rel, err := filepath.Rel(homeDir, mounted)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		parts := strings.Split(rel, string(os.PathSeparator))
+		if len(parts) == 0 || parts[0] == "" || parts[0] == "." {
+			continue
+		}
+		allowed[parts[0]] = struct{}{}
+	}
+	return allowed
+}
+
+func appendSandboxHomeMasks(args []string, homeDir, workspaceDir string, allowedTopLevel map[string]struct{}) []string {
+	workspaceAbs, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		workspaceAbs = workspaceDir
+	}
+
+	entries, err := os.ReadDir(homeDir)
+	if err != nil {
+		return args
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, allowed := allowedTopLevel[entry.Name()]; allowed {
+			continue
+		}
+		path := filepath.Join(homeDir, entry.Name())
+		if path == workspaceAbs || strings.HasPrefix(workspaceAbs, path+string(os.PathSeparator)) {
+			continue
+		}
+		args = append(args, "--tmpfs", path)
+	}
+	return args
+}
+
+func defaultSandboxSensitiveHomeMasks(homeDir string) []string {
+	return []string{
+		filepath.Join(homeDir, ".factory", "sessions"),
+		filepath.Join(homeDir, ".claude", "projects"),
+		filepath.Join(homeDir, ".qwen", "projects"),
+		filepath.Join(homeDir, ".junie", "projects"),
+		filepath.Join(homeDir, ".local", "share", "Trash"),
+	}
 }
 
 func appendSandboxDenylistMasks(args []string, workspaceDir string, readableDenylist []string) []string {
@@ -2341,17 +2628,23 @@ func hashBytes(data []byte) string {
 }
 
 // hashFiles returns the BLAKE3 hash of multiple files concatenated.
-func hashFiles(paths []string) (string, error) {
+// If no files were readable, foundAny is false and hash is empty.
+func hashFiles(paths []string) (hash string, foundAny bool, err error) {
 	hasher := blake3.New()
+	found := false
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue // Skip missing files
 		}
+		found = true
 		_, _ = hasher.Write(data)
 	}
+	if !found {
+		return "", false, nil
+	}
 	sum := hasher.Sum(nil)
-	return "blake3:" + hex.EncodeToString(sum), nil
+	return "blake3:" + hex.EncodeToString(sum), true, nil
 }
 
 // generateAttestation creates an attestation for the eval run.
@@ -2399,7 +2692,7 @@ func generateAttestation(
 
 		// If this task was NOT newly run and we have previous attestation data, use it.
 		if !newlyRunTasks[r.Task] {
-			if prev, ok := previousTasks[r.Task]; ok && prev.SolutionHash != "" {
+			if prev, ok := previousTasks[r.Task]; ok && prev.TaskHash != "" {
 				attestation.Tasks[r.Task] = prev
 				allTaskHashes = append(allTaskHashes, []byte(prev.TaskHash)...)
 				continue
@@ -2422,7 +2715,7 @@ func generateAttestation(
 		for _, f := range t.Files.Stub {
 			solutionPaths = append(solutionPaths, filepath.Join(workspaceDir, task.StripTxtExtension(f)))
 		}
-		if hash, err := hashFiles(solutionPaths); err == nil {
+		if hash, found, err := hashFiles(solutionPaths); err == nil && found {
 			solutionHash = hash
 		}
 

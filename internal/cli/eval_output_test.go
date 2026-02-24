@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lemon07r/sanityharness/internal/task"
+	"github.com/lemon07r/sanityharness/tasks"
 )
 
 func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
@@ -234,4 +237,98 @@ func TestWriteValidationLog(t *testing.T) {
 			t.Fatalf("expected run_error in footer, got: %s", got)
 		}
 	})
+}
+
+func TestHashFilesReturnsEmptyWhenNoFilesPresent(t *testing.T) {
+	t.Parallel()
+
+	hash, found, err := hashFiles([]string{
+		filepath.Join(t.TempDir(), "missing-a"),
+		filepath.Join(t.TempDir(), "missing-b"),
+	})
+	if err != nil {
+		t.Fatalf("hashFiles() error = %v", err)
+	}
+	if found {
+		t.Fatal("hashFiles() found = true, want false")
+	}
+	if hash != "" {
+		t.Fatalf("hashFiles() hash = %q, want empty", hash)
+	}
+}
+
+func TestWriteIntegrityViolationArtifacts(t *testing.T) {
+	t.Parallel()
+
+	loader := task.NewLoader(tasks.FS, tasksDir)
+	taskDef, err := loader.Load("flow-processor")
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+
+	taskOutputDir := t.TempDir()
+	workspaceDir := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	modifiedPath := filepath.Join(workspaceDir, "build.gradle.kts")
+	if err := os.WriteFile(modifiedPath, []byte("plugins { kotlin(\"jvm\") version \"9.9.9\" }"), 0o644); err != nil {
+		t.Fatalf("write modified file: %v", err)
+	}
+
+	err = writeIntegrityViolationArtifacts(
+		taskOutputDir,
+		loader,
+		taskDef,
+		workspaceDir,
+		[]string{"build.gradle.kts"},
+		"modified task files (disallowed): build.gradle.kts",
+	)
+	if err != nil {
+		t.Fatalf("writeIntegrityViolationArtifacts() error = %v", err)
+	}
+
+	reportPath := filepath.Join(taskOutputDir, "integrity.json")
+	reportData, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read integrity report: %v", err)
+	}
+
+	var report integrityArtifactReport
+	if err := json.Unmarshal(reportData, &report); err != nil {
+		t.Fatalf("unmarshal integrity report: %v", err)
+	}
+	if report.Task != "kotlin/flow-processor" {
+		t.Fatalf("report task = %q, want kotlin/flow-processor", report.Task)
+	}
+	if len(report.Files) != 1 {
+		t.Fatalf("report files len = %d, want 1", len(report.Files))
+	}
+	entry := report.Files[0]
+	if entry.Path != "build.gradle.kts" {
+		t.Fatalf("entry path = %q, want build.gradle.kts", entry.Path)
+	}
+	if !entry.ExpectedExists || !entry.ActualExists {
+		t.Fatalf("expected_exists=%v actual_exists=%v, want true/true", entry.ExpectedExists, entry.ActualExists)
+	}
+	if entry.ExpectedHash == "" || entry.ActualHash == "" {
+		t.Fatalf("expected both hashes to be populated, got expected=%q actual=%q", entry.ExpectedHash, entry.ActualHash)
+	}
+
+	expectedArtifact := filepath.Join(taskOutputDir, filepath.FromSlash(entry.ExpectedArtifact))
+	actualArtifact := filepath.Join(taskOutputDir, filepath.FromSlash(entry.ActualArtifact))
+	diffArtifact := filepath.Join(taskOutputDir, filepath.FromSlash(entry.DiffArtifact))
+	if _, err := os.Stat(expectedArtifact); err != nil {
+		t.Fatalf("expected artifact missing: %v", err)
+	}
+	if _, err := os.Stat(actualArtifact); err != nil {
+		t.Fatalf("actual artifact missing: %v", err)
+	}
+	diffData, err := os.ReadFile(diffArtifact)
+	if err != nil {
+		t.Fatalf("diff artifact missing: %v", err)
+	}
+	if len(diffData) == 0 {
+		t.Fatal("diff artifact is empty")
+	}
 }

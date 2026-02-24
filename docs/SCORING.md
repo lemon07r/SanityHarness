@@ -139,7 +139,7 @@ Example: `go-bank-account-2026-01-15T143022-a1b2c3d4`
 Each `sanity eval` creates an output directory:
 
 ```
-eval-results/<agent>-<timestamp>/
+eval-results/<timestamp>-<agent>/
 ├── summary.json       # Complete results with weighted scores
 ├── attestation.json   # BLAKE3 hashes for verification
 ├── report.md          # Human-readable Markdown report
@@ -287,7 +287,7 @@ The Markdown report includes:
 Verify the integrity of an eval submission:
 
 ```bash
-./sanity verify ./eval-results/gemini-2026-01-07T120000
+./sanity verify ./eval-results/2026-01-07T120000-gemini
 ```
 
 Verification checks:
@@ -298,7 +298,7 @@ Verification checks:
 ### Verification Output
 
 ```
-Verifying submission: gemini-2026-01-07T120000
+Verifying submission: 2026-01-07T120000-gemini
 
 [PASS] Results hash matches
 [PASS] All 26 task hashes match embedded tasks

@@ -26,7 +26,7 @@ This command checks:
 No tests are re-run; this only validates hash integrity.
 
 Examples:
-  sanity verify ./eval-results/gemini-2026-01-07T120000
+  sanity verify ./eval-results/2026-01-07T120000-gemini
   sanity verify /path/to/submission`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

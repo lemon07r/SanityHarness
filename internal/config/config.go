@@ -174,8 +174,10 @@ type HarnessConfig struct {
 
 // SandboxConfig contains bubblewrap sandbox settings.
 type SandboxConfig struct {
-	WritableDirs     []string `toml:"writable_dirs"`     // Additional $HOME-relative dirs to mount writable
-	ReadableDenylist []string `toml:"readable_denylist"` // Repo-relative or absolute paths to hide from agents
+	WritableDirs        []string `toml:"writable_dirs"`         // Additional $HOME-relative dirs to mount writable
+	ReadableDenylist    []string `toml:"readable_denylist"`     // Repo-relative or absolute paths to hide from agents
+	SharedReadWriteDirs []string `toml:"shared_readwrite_dirs"` // Broad shared allowlist mounted read/write (home-relative or absolute)
+	SharedReadOnlyDirs  []string `toml:"shared_readonly_dirs"`  // Broad shared allowlist mounted read-only (home-relative or absolute)
 }
 
 // DockerConfig contains Docker-related settings.
@@ -205,6 +207,41 @@ var Default = Config{
 		DartImage:       "ghcr.io/lemon07r/sanity-dart:latest",
 		ZigImage:        "ghcr.io/lemon07r/sanity-zig:latest",
 		AutoPull:        true,
+	},
+	Sandbox: SandboxConfig{
+		// Compatibility-focused shared allowlist: keep common auth/config/cache/toolchain
+		// paths writable while masking high-risk read locations in the sandbox layer.
+		SharedReadWriteDirs: []string{
+			".cache",
+			".config",
+			".local/share",
+			".local/state",
+			".npm",
+			".pnpm-store",
+			".bun",
+			".cargo",
+			".rustup",
+			".gradle",
+			".pub-cache",
+			".dart-tool",
+			".claude",
+			".gemini",
+			".junie",
+			".qwen",
+			".opencode",
+			".codex",
+			".kilocode",
+			".factory",
+			".go",
+			"go",
+		},
+		SharedReadOnlyDirs: []string{
+			"bin",
+			".local/bin",
+			"go/bin",
+			".opencode/bin",
+			".bun/bin",
+		},
 	},
 }
 

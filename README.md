@@ -105,7 +105,7 @@ make build    # Build the CLI
 ./sanity eval --agent opencode --keep-workspaces      # Keep workspaces for debugging
 ./sanity eval --agent gemini --no-sandbox             # Disable bubblewrap sandbox
 ./sanity eval --agent gemini --legacy                 # Legacy mode (hidden tests visible to agent)
-./sanity eval --resume ./eval-results/gemini-...      # Resume interrupted eval
+./sanity eval --resume ./eval-results/2026-01-07T120000-gemini  # Resume interrupted eval
 ```
 
 ### View Results
@@ -118,7 +118,7 @@ make build    # Build the CLI
 ### Verify Submission
 
 ```bash
-./sanity verify ./eval-results/gemini-2026-01-07T120000
+./sanity verify ./eval-results/2026-01-07T120000-gemini
 ```
 
 ### Clean Up
@@ -217,7 +217,7 @@ See [docs/CONFIGURATION.md#agent-configuration](docs/CONFIGURATION.md#agent-conf
 
 > **Workspace isolation:** During `sanity eval`, each agent runs in an isolated temporary workspace under `/tmp` rather than inside `eval-results/`. This prevents agents from reading other eval results, sibling task solutions, or their own `agent.log`. After the agent finishes, files are copied back to `eval-results/` for validation. Combined with the bubblewrap sandbox (which uses `--tmpfs /tmp`), agents have zero visibility into other evaluations.
 
-> **Sandbox note:** `sanity eval` runs agents inside a [bubblewrap](https://github.com/containers/bubblewrap) sandbox where `$HOME` is read-only. All dot-directories under `$HOME` (e.g. `~/.my-agent/`) are automatically writable, so most agents work out of the box. For non-dot writable paths, use `[sandbox] writable_dirs`; for sensitive readable paths to mask, use `[sandbox] readable_denylist`. Use `--no-sandbox` to disable.
+> **Sandbox note:** `sanity eval` runs agents inside a [bubblewrap](https://github.com/containers/bubblewrap) sandbox where `$HOME` is read-only by default. A configurable allowlist is mounted read/write (`[sandbox] shared_readwrite_dirs`) and read-only (`[sandbox] shared_readonly_dirs`), with additional writable paths available via `[sandbox] writable_dirs`. Non-allowlisted top-level home directories are masked, and extra sensitive paths can be masked with `[sandbox] readable_denylist`. Use `--no-sandbox` to disable.
 
 > **Legacy mode:** Prior to v1.6.0, a bug caused hidden tests to be included in the workspace during `sanity eval`, making them visible to agents. The `--legacy` flag reproduces this behavior so that older evaluation runs can be fairly compared or resumed. When `--legacy` is active, hidden test files are written to the workspace at init time (instead of being overlaid just before validation), and the hidden-test overlay step is skipped. Use this flag when resuming runs that were originally executed with the buggy behavior.
 
@@ -248,7 +248,7 @@ sessions/<session-id>/
 Each `sanity eval` creates:
 
 ```
-eval-results/<agent>-<timestamp>/
+eval-results/<timestamp>-<agent>/
 ├── summary.json       # Complete results with weighted scores
 ├── attestation.json   # BLAKE3 hashes for verification
 ├── report.md          # Human-readable report
@@ -256,7 +256,10 @@ eval-results/<agent>-<timestamp>/
 ├── run-config.json    # Config for resume capability
 └── <task>/
     ├── agent.log      # Agent output during task execution (includes HARNESS timeout footer)
-    └── validation.log # Test runner output + HARNESS validation footer (always non-empty)
+    ├── validation.log # Test runner output + HARNESS validation footer (always non-empty)
+    ├── integrity.json # Present on integrity violations; forensic metadata
+    ├── integrity-files/ # Present on integrity violations; expected/actual file copies
+    └── integrity-diff/  # Present on integrity violations; per-file diffs
 ```
 
 **Resume interrupted evals:** If interrupted (CTRL+C), the harness saves partial results and prints a resume command. Use `./sanity eval --resume <dir>` to continue.

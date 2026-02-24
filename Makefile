@@ -17,6 +17,12 @@ BINARY_NAME   := sanity
 CMD_PATH      := ./cmd/sanity
 BIN_DIR       := ./bin
 COVERAGE_DIR  := ./coverage
+GO_CACHE_ROOT := $(CURDIR)/.sanity-cache/go
+
+# Keep build/lint caches inside the repo so CI/dev workflows work in restricted
+# environments where $HOME cache paths may be read-only.
+export GOCACHE ?= $(GO_CACHE_ROOT)/gocache
+export GOLANGCI_LINT_CACHE ?= $(GO_CACHE_ROOT)/golangci-lint
 
 # Go module path (for ldflags injection)
 MODULE_PATH   := github.com/lemon07r/sanityharness
@@ -141,7 +147,7 @@ verify: ## Verify dependencies
 fmt: ## Format code with goimports (handles import sorting)
 	@printf '$(INFO) Formatting code with goimports...\n'
 	@if command -v goimports >/dev/null 2>&1; then \
-		find . -name '*.go' -not -path './eval-results/*' -not -path './sessions/*' -not -path './bin/*' | xargs -r goimports -w -local $(MODULE_PATH); \
+		find . -name '*.go' -not -path './eval-results/*' -not -path './sessions/*' -not -path './bin/*' -not -path './.sanity-cache/*' | xargs -r goimports -w -local $(MODULE_PATH); \
 	else \
 		printf '$(WARN) goimports not found, falling back to gofmt...\n'; \
 		go fmt ./...; \
@@ -152,7 +158,30 @@ fmt: ## Format code with goimports (handles import sorting)
 lint: ## Run golangci-lint
 	@printf '$(INFO) Running golangci-lint...\n'
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./cmd/... ./internal/...; \
+		default_gocache=$$(go env GOCACHE); \
+		default_gomodcache=$$(go env GOMODCACHE); \
+		gocache="$$default_gocache"; \
+		gomodcache="$$default_gomodcache"; \
+		golangci_cache="$$(pwd)/.sanity-cache/go/golangci-lint"; \
+		gocache_probe="$$default_gocache/.sanity-write-probe-$$$$"; \
+		if ! ( : > "$$gocache_probe" ) 2>/dev/null; then \
+			gocache="$$(pwd)/.sanity-cache/go/gocache"; \
+		else \
+			rm -f "$$gocache_probe"; \
+		fi; \
+		gomodcache_probe="$$default_gomodcache/.sanity-write-probe-$$$$"; \
+		if ! ( : > "$$gomodcache_probe" ) 2>/dev/null; then \
+			gomodcache="$$(pwd)/.sanity-cache/go/gomodcache"; \
+			mkdir -p "$$gomodcache"; \
+			if [ -d "$$default_gomodcache" ] && [ ! -f "$$gomodcache/.primed" ]; then \
+				cp -a "$$default_gomodcache/." "$$gomodcache/" >/dev/null 2>&1 || true; \
+				touch "$$gomodcache/.primed"; \
+			fi; \
+		else \
+			rm -f "$$gomodcache_probe"; \
+		fi; \
+		mkdir -p "$$gocache" "$$gomodcache" "$$golangci_cache"; \
+		GOCACHE="$$gocache" GOMODCACHE="$$gomodcache" GOLANGCI_LINT_CACHE="$$golangci_cache" golangci-lint run ./cmd/... ./internal/...; \
 	else \
 		printf '$(WARN) golangci-lint not found. Install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)\n'; \
 		exit 1; \

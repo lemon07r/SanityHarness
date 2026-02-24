@@ -62,6 +62,32 @@ zig_image = "ghcr.io/lemon07r/sanity-zig:latest"
 auto_pull = true
 ```
 
+### [sandbox] Section
+
+Sandbox settings apply to `sanity eval` when bubblewrap is available and `--no-sandbox` is not used.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `shared_readwrite_dirs` | []string | Built-in allowlist | HOME-relative or absolute paths mounted read/write for agent compatibility |
+| `shared_readonly_dirs` | []string | Built-in allowlist | HOME-relative or absolute paths mounted read-only |
+| `writable_dirs` | []string | `[]` | Extra HOME-relative writable paths (in addition to shared read/write dirs) |
+| `readable_denylist` | []string | `[]` | Repo-relative or absolute paths masked with tmpfs so agents cannot read them |
+
+Notes:
+- `$HOME` is mounted read-only by default.
+- Non-allowlisted top-level directories under `$HOME` are masked.
+- `writable_dirs` is additive and remains useful for project/tool-specific writable paths.
+
+Example:
+
+```toml
+[sandbox]
+shared_readwrite_dirs = [".config", ".cache", ".local/share", ".local/state", ".claude", ".codex"]
+shared_readonly_dirs = ["bin", ".local/bin", "go/bin"]
+writable_dirs = ["go", "my-tool-data"]
+readable_denylist = ["tasks", "eval-results", "sessions"]
+```
+
 ## Agent Configuration
 
 SanityHarness supports 19 built-in coding agents and allows custom agent definitions.

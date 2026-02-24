@@ -955,7 +955,7 @@ func TestBuildSandboxArgs(t *testing.T) {
 	t.Parallel()
 
 	workspaceDir := t.TempDir()
-	args := buildSandboxArgs(workspaceDir, nil, nil)
+	args := buildSandboxArgs(workspaceDir, "", nil, nil, nil, nil)
 
 	// Verify required arguments are present.
 	assertContainsArg := func(flag, value string) {
@@ -1019,7 +1019,7 @@ func TestWrapCommandWithSandbox(t *testing.T) {
 	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, "test")
 	cmd.Dir = workspaceDir
 
-	wrapped := wrapCommandWithSandbox(ctx, cmd, nil, nil)
+	wrapped := wrapCommandWithSandbox(ctx, cmd, nil, nil, nil, nil)
 
 	// The wrapped command should use bwrap.
 	if !strings.HasSuffix(wrapped.Path, "bwrap") {
@@ -1067,7 +1067,7 @@ func TestBuildSandboxArgsMasksDenylistedDirs(t *testing.T) {
 		t.Fatalf("mkdir deny dir: %v", err)
 	}
 
-	args := buildSandboxArgs(workspaceDir, nil, []string{denyDir, filepath.Join(t.TempDir(), "missing")})
+	args := buildSandboxArgs(workspaceDir, "", nil, nil, nil, []string{denyDir, filepath.Join(t.TempDir(), "missing")})
 
 	foundMask := false
 	for i, arg := range args {
@@ -1078,6 +1078,93 @@ func TestBuildSandboxArgsMasksDenylistedDirs(t *testing.T) {
 	}
 	if !foundMask {
 		t.Fatalf("expected denylisted directory %s to be masked via --tmpfs", denyDir)
+	}
+}
+
+func TestBuildSandboxArgsMasksNonAllowlistedHomeDirs(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	for _, rel := range []string{
+		".config",
+		".factory",
+		filepath.Join(".factory", "sessions"),
+		"Downloads",
+		"Development",
+	} {
+		if err := os.MkdirAll(filepath.Join(homeDir, rel), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+	}
+
+	workspaceDir := t.TempDir()
+	args := buildSandboxArgs(
+		workspaceDir,
+		"",
+		nil,
+		[]string{".config", ".factory"},
+		nil,
+		nil,
+	)
+
+	assertHasMount := func(flag, value string) bool {
+		t.Helper()
+		for i, arg := range args {
+			if arg == flag && i+1 < len(args) && args[i+1] == value {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !assertHasMount("--bind", filepath.Join(homeDir, ".config")) {
+		t.Fatalf("expected .config to be writable-mounted")
+	}
+	if !assertHasMount("--bind", filepath.Join(homeDir, ".factory")) {
+		t.Fatalf("expected .factory to be writable-mounted")
+	}
+	if !assertHasMount("--tmpfs", filepath.Join(homeDir, "Downloads")) {
+		t.Fatalf("expected Downloads to be masked")
+	}
+	if !assertHasMount("--tmpfs", filepath.Join(homeDir, "Development")) {
+		t.Fatalf("expected Development to be masked")
+	}
+	if !assertHasMount("--tmpfs", filepath.Join(homeDir, ".factory", "sessions")) {
+		t.Fatalf("expected .factory/sessions to be masked")
+	}
+}
+
+func TestBuildSandboxArgsAllowsAgentCommandDir(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	binDir := filepath.Join(homeDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	commandPath := filepath.Join(binDir, "fake-agent")
+	if err := os.WriteFile(commandPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake command: %v", err)
+	}
+
+	workspaceDir := t.TempDir()
+	args := buildSandboxArgs(workspaceDir, commandPath, nil, nil, nil, nil)
+
+	hasReadOnlyBind := false
+	hasBinMask := false
+	for i, arg := range args {
+		if arg == "--ro-bind" && i+1 < len(args) && args[i+1] == binDir {
+			hasReadOnlyBind = true
+		}
+		if arg == "--tmpfs" && i+1 < len(args) && args[i+1] == binDir {
+			hasBinMask = true
+		}
+	}
+	if !hasReadOnlyBind {
+		t.Fatalf("expected command directory %s to be read-only mounted", binDir)
+	}
+	if hasBinMask {
+		t.Fatalf("command directory %s should not be masked", binDir)
 	}
 }
 
