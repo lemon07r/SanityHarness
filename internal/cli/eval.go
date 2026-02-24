@@ -144,6 +144,24 @@ var authFailurePatterns = []string{
 	"api key invalid",
 }
 
+// Patterns indicating validation infrastructure/runtime failures (not code/test failures).
+var validationInfraErrorPatterns = []string{
+	"cannot connect to the docker daemon",
+	"error response from daemon",
+	"dial tcp",
+	"connection refused",
+	"i/o timeout",
+	"tls handshake timeout",
+	"temporary failure in name resolution",
+	"no such host",
+	"net/http: request canceled",
+	"context deadline exceeded while awaiting headers",
+	"broken pipe",
+	"ensuring image",
+	"creating container",
+	"starting container",
+}
+
 var selfTestCommandPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bgo test\b`),
 	regexp.MustCompile(`(?i)\bcargo test\b`),
@@ -824,7 +842,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	// Run tasks
 	results := make([]EvalResult, 0, len(tasksToRun))
 	passed, failed := 0, 0
-	var infraFailedTasks []string // Tasks that failed due to infra issues (excluded from results)
+	var resumableFailedTasks []string // External failures excluded from results (resumable via --resume)
 
 	parallel := shared.Parallel
 	if parallel <= 0 {
@@ -847,17 +865,21 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 
 			result := runTaskWithAgent(interruptCtx, r, t, spec.Agent, spec.Model, outputDir, shared.Timeout)
 
-			// Infra failures are excluded from results so they can be resumed later.
-			if result.InfraFailure {
-				fmt.Printf(" ⚠ INFRA FAILURE — will be skipped (resumable)\n")
-				infraFailedTasks = append(infraFailedTasks, t.ID())
-				// Delete workspace so resume picks it up as incomplete.
-				if result.WorkspaceDir != "" {
-					_ = os.RemoveAll(result.WorkspaceDir)
+			// External failures are excluded from results so they can be resumed later.
+			if isResumableExternalFailure(result) {
+				fmt.Printf(" ⚠ %s — will be skipped (resumable)\n", externalFailureLabel(result.FailureClass))
+				resumableFailedTasks = append(resumableFailedTasks, fmt.Sprintf("%s [%s]", t.ID(), result.FailureClass))
+				removeTaskArtifactsForResume(outputDir, result)
+				if result.FailureClass == FailureClassQuotaExhausted {
+					consecutiveQuotaExhausted++
+					if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
+						wasInterrupted = true
+						fmt.Printf("\n\033[33m⚠ Quota exhausted for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
+						break
+					}
+				} else {
+					consecutiveQuotaExhausted = 0
 				}
-				// Also remove the task output dir (agent.log copy).
-				taskOutputDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
-				_ = os.RemoveAll(taskOutputDir)
 				fmt.Println()
 				continue
 			}
@@ -948,18 +970,15 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		for jr := range jobResults {
 			seen++
 
-			// Infra failures are excluded from results so they can be resumed later.
-			if jr.r.InfraFailure {
-				fmt.Printf(" [%d/%d] %s ⚠ INFRA FAILURE — will be skipped (resumable)\n", seen, len(tasksToRun), jr.r.Task)
-				infraFailedTasks = append(infraFailedTasks, jr.r.Task)
-				if jr.r.WorkspaceDir != "" {
-					_ = os.RemoveAll(jr.r.WorkspaceDir)
-				}
-				// Remove task output dir (agent.log copy).
-				parts := strings.SplitN(jr.r.Task, "/", 2)
-				if len(parts) == 2 {
-					taskOutputDir := filepath.Join(outputDir, parts[0]+"-"+parts[1])
-					_ = os.RemoveAll(taskOutputDir)
+			// External failures are excluded from results so they can be resumed later.
+			if isResumableExternalFailure(jr.r) {
+				fmt.Printf(" [%d/%d] %s ⚠ %s — will be skipped (resumable)\n", seen, len(tasksToRun), jr.r.Task, externalFailureLabel(jr.r.FailureClass))
+				resumableFailedTasks = append(resumableFailedTasks, fmt.Sprintf("%s [%s]", jr.r.Task, jr.r.FailureClass))
+				removeTaskArtifactsForResume(outputDir, jr.r)
+				if jr.r.FailureClass == FailureClassQuotaExhausted {
+					consecutiveQuotaExhausted++
+				} else {
+					consecutiveQuotaExhausted = 0
 				}
 			} else {
 				collected[jr.idx] = jr.r
@@ -1009,16 +1028,9 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 				close(stopSending)
 				// Drain remaining results from in-flight tasks.
 				for jr := range jobResults {
-					if jr.r.InfraFailure {
-						infraFailedTasks = append(infraFailedTasks, jr.r.Task)
-						if jr.r.WorkspaceDir != "" {
-							_ = os.RemoveAll(jr.r.WorkspaceDir)
-						}
-						parts := strings.SplitN(jr.r.Task, "/", 2)
-						if len(parts) == 2 {
-							taskOutputDir := filepath.Join(outputDir, parts[0]+"-"+parts[1])
-							_ = os.RemoveAll(taskOutputDir)
-						}
+					if isResumableExternalFailure(jr.r) {
+						resumableFailedTasks = append(resumableFailedTasks, fmt.Sprintf("%s [%s]", jr.r.Task, jr.r.FailureClass))
+						removeTaskArtifactsForResume(outputDir, jr.r)
 					} else {
 						collected[jr.idx] = jr.r
 						if jr.r.Passed {
@@ -1034,7 +1046,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 				break collectLoop
 			}
 		}
-		// Only include results that were actually run (excluding infra failures).
+		// Only include results that were actually run (excluding resumable external failures).
 		for _, r := range collected {
 			if r.Task != "" {
 				results = append(results, r)
@@ -1341,11 +1353,11 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 
 	fmt.Println()
 
-	// Report infra failures and provide resume command.
-	if len(infraFailedTasks) > 0 {
+	// Report resumable external failures and provide resume command.
+	if len(resumableFailedTasks) > 0 {
 		fmt.Println("\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-		fmt.Printf("\033[33m ⚠ %d task(s) skipped due to infrastructure failures:\033[0m\n", len(infraFailedTasks))
-		for _, t := range infraFailedTasks {
+		fmt.Printf("\033[33m ⚠ %d task(s) skipped due to external failures (auth/quota/infra):\033[0m\n", len(resumableFailedTasks))
+		for _, t := range resumableFailedTasks {
 			fmt.Printf("   • %s\n", t)
 		}
 		fmt.Println()
@@ -1415,9 +1427,9 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, agentWorkDir, agentLogPath, agentTimeout, agent, workspaceReadyAt)
 	applyAgentExecutionResult(&result, agentResult, agentLogPath, agentWorkDir)
 
-	// If the agent never produced output (infra failure), skip validation entirely.
+	// If agent execution failed due auth/quota/infra, skip validation entirely.
 	// The task will be excluded from results so it can be resumed later.
-	if shouldSkipValidationForInfra(&result, agentResult.infraFailure) {
+	if shouldSkipValidationForExternalFailure(&result) {
 		return result
 	}
 
@@ -1530,15 +1542,62 @@ func applyAgentExecutionResult(result *EvalResult, agentResult agentExecutionRes
 	result.OutOfWorkspaceReadsConfident = metrics.OutOfWorkspaceReadsConfident
 }
 
-func shouldSkipValidationForInfra(result *EvalResult, infraFailure bool) bool {
-	if !infraFailure {
+func shouldSkipValidationForExternalFailure(result *EvalResult) bool {
+	switch result.FailureClass {
+	case FailureClassInfra:
+		if result.Error == "" {
+			result.Error = "infra failure: agent produced no output after retries"
+		}
+		result.InfraFailure = true
+		return true
+	case FailureClassAuth:
+		if result.Error == "" {
+			result.Error = "auth failure: agent authentication failed"
+		}
+		return true
+	case FailureClassQuotaExhausted:
+		if result.Error == "" {
+			result.Error = "quota failure: exhausted quota/rate-limit retries"
+		}
+		result.QuotaExhausted = true
+		return true
+	default:
 		return false
 	}
-	result.Error = "infra failure: agent produced no output after retries"
-	if result.FailureClass == FailureClassNone {
-		result.FailureClass = FailureClassInfra
+}
+
+func isResumableExternalFailure(result EvalResult) bool {
+	switch result.FailureClass {
+	case FailureClassInfra, FailureClassAuth, FailureClassQuotaExhausted:
+		return true
+	default:
+		return false
 	}
-	return true
+}
+
+func externalFailureLabel(class FailureClass) string {
+	switch class {
+	case FailureClassAuth:
+		return "AUTH FAILURE"
+	case FailureClassQuotaExhausted:
+		return "QUOTA EXHAUSTED"
+	case FailureClassInfra:
+		return "INFRA FAILURE"
+	default:
+		return "EXTERNAL FAILURE"
+	}
+}
+
+func removeTaskArtifactsForResume(outputDir string, result EvalResult) {
+	if result.WorkspaceDir != "" {
+		_ = os.RemoveAll(result.WorkspaceDir)
+	}
+	parts := strings.SplitN(result.Task, "/", 2)
+	if len(parts) != 2 {
+		return
+	}
+	taskOutputDir := filepath.Join(outputDir, parts[0]+"-"+parts[1])
+	_ = os.RemoveAll(taskOutputDir)
 }
 
 func detectAndRecordIntegrityViolation(
@@ -1644,11 +1703,29 @@ func handleValidationRunError(
 	)
 
 	result.Error = runErr.Error()
+	if isValidationInfraError(runErr) {
+		result.FailureClass = FailureClassInfra
+		result.InfraFailure = true
+		return
+	}
 	if timedOut {
 		result.FailureClass = FailureClassValidationTimeout
 		return
 	}
 	result.FailureClass = FailureClassValidationError
+}
+
+func isValidationInfraError(runErr error) bool {
+	if runErr == nil {
+		return false
+	}
+	lower := strings.ToLower(runErr.Error())
+	for _, pattern := range validationInfraErrorPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func applyValidationSessionResult(result *EvalResult, session *resultpkg.Session) {

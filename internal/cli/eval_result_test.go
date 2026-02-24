@@ -2,6 +2,7 @@ package cli
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +75,70 @@ func TestFinalizeEvalResult(t *testing.T) {
 			}
 			if result.Duration <= 0 {
 				t.Fatalf("duration must be > 0, got %v", result.Duration)
+			}
+		})
+	}
+}
+
+func TestShouldSkipValidationForExternalFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		class           FailureClass
+		err             string
+		wantSkip        bool
+		wantErrContains string
+		wantInfra       bool
+		wantQuota       bool
+	}{
+		{
+			name:            "infra_failure_is_skipped",
+			class:           FailureClassInfra,
+			wantSkip:        true,
+			wantErrContains: "infra failure",
+			wantInfra:       true,
+		},
+		{
+			name:            "auth_failure_is_skipped",
+			class:           FailureClassAuth,
+			wantSkip:        true,
+			wantErrContains: "auth failure",
+		},
+		{
+			name:            "quota_exhausted_is_skipped",
+			class:           FailureClassQuotaExhausted,
+			wantSkip:        true,
+			wantErrContains: "quota failure",
+			wantQuota:       true,
+		},
+		{
+			name:     "normal_failure_is_not_skipped",
+			class:    FailureClassValidationError,
+			wantSkip: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := EvalResult{
+				FailureClass: tc.class,
+				Error:        tc.err,
+			}
+			skipped := shouldSkipValidationForExternalFailure(&r)
+			if skipped != tc.wantSkip {
+				t.Fatalf("shouldSkipValidationForExternalFailure() = %v, want %v", skipped, tc.wantSkip)
+			}
+			if tc.wantErrContains != "" && !strings.Contains(r.Error, tc.wantErrContains) {
+				t.Fatalf("error = %q, want contains %q", r.Error, tc.wantErrContains)
+			}
+			if r.InfraFailure != tc.wantInfra {
+				t.Fatalf("infra_failure = %v, want %v", r.InfraFailure, tc.wantInfra)
+			}
+			if r.QuotaExhausted != tc.wantQuota {
+				t.Fatalf("quota_exhausted = %v, want %v", r.QuotaExhausted, tc.wantQuota)
 			}
 		})
 	}

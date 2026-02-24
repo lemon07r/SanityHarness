@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -883,6 +884,47 @@ func TestDetectAuthError(t *testing.T) {
 			got := detectAuthError(tmpFile)
 			if got != tc.wantAuth {
 				t.Fatalf("detectAuthError() = %v, want %v", got, tc.wantAuth)
+			}
+		})
+	}
+}
+
+func TestIsValidationInfraError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "docker daemon unreachable",
+			err:  errors.New("ensuring image: Cannot connect to the Docker daemon at unix:///var/run/docker.sock"),
+			want: true,
+		},
+		{
+			name: "network timeout",
+			err:  errors.New("creating container: dial tcp 10.0.0.1:443: i/o timeout"),
+			want: true,
+		},
+		{
+			name: "test failure is not infra",
+			err:  errors.New("execution failed for task ':test'"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := isValidationInfraError(tc.err)
+			if got != tc.want {
+				t.Fatalf("isValidationInfraError() = %v, want %v", got, tc.want)
 			}
 		})
 	}
