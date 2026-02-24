@@ -17,6 +17,7 @@ func TestFinalizeEvalResult(t *testing.T) {
 		weight     task.Weight
 		wantStatus task.ResultStatus
 		wantScore  float64
+		wantClass  FailureClass
 	}{
 		{
 			name: "validation_error_sets_error_status_and_zero_score",
@@ -27,6 +28,7 @@ func TestFinalizeEvalResult(t *testing.T) {
 			weight:     task.Weight{Base: 1.5},
 			wantStatus: task.StatusError,
 			wantScore:  0.0,
+			wantClass:  FailureClassValidationTimeout,
 		},
 		{
 			name: "integrity_violation_sets_penalty_score",
@@ -37,6 +39,7 @@ func TestFinalizeEvalResult(t *testing.T) {
 			weight:     task.Weight{Base: 1.4},
 			wantStatus: task.StatusIntegrityViolation,
 			wantScore:  -0.25,
+			wantClass:  FailureClassIntegrity,
 		},
 		{
 			name: "agent_timeout_with_pass_is_partial_pass",
@@ -47,6 +50,7 @@ func TestFinalizeEvalResult(t *testing.T) {
 			weight:     task.Weight{Base: 1.2},
 			wantStatus: task.StatusPartialPass,
 			wantScore:  1.2,
+			wantClass:  FailureClassNone,
 		},
 	}
 
@@ -64,6 +68,9 @@ func TestFinalizeEvalResult(t *testing.T) {
 			}
 			if math.Abs(result.WeightedScore-tt.wantScore) > 1e-9 {
 				t.Fatalf("weighted_score = %v, want %v", result.WeightedScore, tt.wantScore)
+			}
+			if result.FailureClass != tt.wantClass {
+				t.Fatalf("failure_class = %q, want %q", result.FailureClass, tt.wantClass)
 			}
 			if result.Duration <= 0 {
 				t.Fatalf("duration must be > 0, got %v", result.Duration)

@@ -24,6 +24,7 @@ import (
 	"github.com/zeebo/blake3"
 
 	"github.com/lemon07r/sanityharness/internal/config"
+	resultpkg "github.com/lemon07r/sanityharness/internal/result"
 	"github.com/lemon07r/sanityharness/internal/runner"
 	"github.com/lemon07r/sanityharness/internal/task"
 	"github.com/lemon07r/sanityharness/tasks"
@@ -124,19 +125,23 @@ var recoverablePatterns = []string{
 }
 
 // Patterns indicating non-recoverable quota errors (skip retries).
-var nonRecoverablePatterns = []string{
+var nonRecoverableQuotaPatterns = []string{
 	"quota reset",
 	"daily quota",
 	"monthly quota",
 	"billing",
+	"exhausted your capacity",
+	"exceeded your current quota",
+	"subscription limit",
+}
+
+// Patterns indicating non-recoverable authentication/authorization errors.
+var authFailurePatterns = []string{
 	"authentication failed",
 	"unauthorized",
 	"forbidden",
 	"invalid api key",
 	"api key invalid",
-	"exhausted your capacity",
-	"exceeded your current quota",
-	"subscription limit",
 }
 
 var selfTestCommandPatterns = []*regexp.Regexp{
@@ -174,36 +179,62 @@ var outOfWorkspaceReadPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)/sessions/`),
 }
 
+var (
+	ansiEscapePattern   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	bashLCPattern       = regexp.MustCompile(`(?i)/usr/bin/bash -lc ['"](.+?)['"]`)
+	absolutePathPattern = regexp.MustCompile(`(^|[\s"'` + "`" + `])(/[^"'` + "`" + `\s;&|]*)`)
+)
+
 type agentBehaviorMetrics struct {
-	SelfTestCommands         int
-	ToolchainInstallAttempts int
-	OutOfWorkspaceReads      int
+	SelfTestCommands             int
+	SelfTestCommandsConfident    bool
+	ToolchainInstallAttempts     int
+	OutOfWorkspaceReads          int
+	OutOfWorkspaceReadsConfident bool
 }
+
+// FailureClass categorizes the root cause of non-successful or degraded runs.
+type FailureClass string
+
+const (
+	FailureClassNone              FailureClass = "none"
+	FailureClassQuotaRecoverable  FailureClass = "quota_recoverable"
+	FailureClassQuotaExhausted    FailureClass = "quota_exhausted"
+	FailureClassAuth              FailureClass = "auth"
+	FailureClassInfra             FailureClass = "infra"
+	FailureClassIntegrity         FailureClass = "integrity"
+	FailureClassValidationError   FailureClass = "validation_error"
+	FailureClassValidationTimeout FailureClass = "validation_timeout"
+)
 
 // EvalResult holds the result of evaluating a single task.
 type EvalResult struct {
-	Task                       string            `json:"task"`
-	Language                   string            `json:"language"`
-	Tier                       string            `json:"tier,omitempty"`
-	Difficulty                 string            `json:"difficulty,omitempty"`
-	Passed                     bool              `json:"passed"`
-	AgentTimedOut              bool              `json:"agent_timed_out"`
-	Status                     task.ResultStatus `json:"status"`
-	Attempts                   int               `json:"attempts"`
-	Duration                   float64           `json:"duration_seconds"`
-	AgentTime                  float64           `json:"agent_duration_seconds,omitempty"`
-	ValidateTime               float64           `json:"validation_duration_seconds,omitempty"`
-	PromptChars                int               `json:"prompt_chars,omitempty"`
-	Error                      string            `json:"error,omitempty"`
-	Weight                     float64           `json:"weight,omitempty"`
-	WeightedScore              float64           `json:"weighted_score,omitempty"`
-	QuotaRetries               int               `json:"quota_retries"`
-	QuotaExhausted             bool              `json:"quota_exhausted"`
-	InfraFailure               bool              `json:"infra_failure"`
-	SelfTestCommands           int               `json:"self_test_commands"`
-	ToolchainInstallAttempts   int               `json:"toolchain_install_attempts"`
-	OutOfWorkspaceReadAttempts int               `json:"out_of_workspace_read_attempts"`
-	WorkspaceDir               string            `json:"-"` // Not serialized, used for cleanup
+	Task                         string            `json:"task"`
+	Language                     string            `json:"language"`
+	Tier                         string            `json:"tier,omitempty"`
+	Difficulty                   string            `json:"difficulty,omitempty"`
+	Passed                       bool              `json:"passed"`
+	AgentTimedOut                bool              `json:"agent_timed_out"`
+	Status                       task.ResultStatus `json:"status"`
+	Attempts                     int               `json:"attempts"`
+	Duration                     float64           `json:"duration_seconds"`
+	AgentTime                    float64           `json:"agent_duration_seconds,omitempty"`
+	ValidateTime                 float64           `json:"validation_duration_seconds,omitempty"`
+	PromptChars                  int               `json:"prompt_chars,omitempty"`
+	Error                        string            `json:"error,omitempty"`
+	FailureClass                 FailureClass      `json:"failure_class"`
+	Weight                       float64           `json:"weight,omitempty"`
+	WeightedScore                float64           `json:"weighted_score,omitempty"`
+	QuotaRetries                 int               `json:"quota_retries"`
+	InfraRetries                 int               `json:"infra_retries"`
+	QuotaExhausted               bool              `json:"quota_exhausted"`
+	InfraFailure                 bool              `json:"infra_failure"`
+	SelfTestCommands             int               `json:"self_test_commands"`
+	SelfTestCommandsConfident    bool              `json:"self_test_commands_confident"`
+	ToolchainInstallAttempts     int               `json:"toolchain_install_attempts"`
+	OutOfWorkspaceReadAttempts   int               `json:"out_of_workspace_read_attempts"`
+	OutOfWorkspaceReadsConfident bool              `json:"out_of_workspace_read_attempts_confident"`
+	WorkspaceDir                 string            `json:"-"` // Not serialized, used for cleanup
 }
 
 // EvalAggregate summarizes results for a group (language, tier, difficulty).
@@ -248,7 +279,10 @@ type EvalSummary struct {
 	Sandbox                         bool                     `json:"sandbox"`
 	Legacy                          bool                     `json:"legacy"`
 	QuotaAffectedTasks              int                      `json:"quota_affected_tasks"`
+	AuthAffectedTasks               int                      `json:"auth_affected_tasks"`
+	InfraAffectedTasks              int                      `json:"infra_affected_tasks"`
 	TotalQuotaRetries               int                      `json:"total_quota_retries"`
+	TotalInfraRetries               int                      `json:"total_infra_retries"`
 	TotalSelfTestCommands           int                      `json:"total_self_test_commands"`
 	TotalToolchainInstallAttempts   int                      `json:"total_toolchain_install_attempts"`
 	TotalOutOfWorkspaceReadAttempts int                      `json:"total_out_of_workspace_read_attempts"`
@@ -824,12 +858,6 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 				// Also remove the task output dir (agent.log copy).
 				taskOutputDir := filepath.Join(outputDir, fmt.Sprintf("%s-%s", t.Language, t.Slug))
 				_ = os.RemoveAll(taskOutputDir)
-				consecutiveQuotaExhausted++
-				if consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
-					wasInterrupted = true
-					fmt.Printf("\n\033[33m⚠ Infra/quota failures for %d consecutive tasks. Stopping early to allow resume.\033[0m\n", consecutiveQuotaExhausted)
-					break
-				}
 				fmt.Println()
 				continue
 			}
@@ -933,7 +961,6 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 					taskOutputDir := filepath.Join(outputDir, parts[0]+"-"+parts[1])
 					_ = os.RemoveAll(taskOutputDir)
 				}
-				consecutiveQuotaExhausted++
 			} else {
 				collected[jr.idx] = jr.r
 
@@ -970,10 +997,10 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 			shouldStop := checkInterrupted(interruptCtx)
 			stopReason := "Interrupt received"
 
-			// Also stop if we hit consecutive quota exhaustion threshold
+			// Also stop if we hit consecutive quota exhaustion threshold.
 			if !shouldStop && consecutiveQuotaExhausted >= quotaExhaustedStopThreshold {
 				shouldStop = true
-				stopReason = fmt.Sprintf("Quota/infra failures for %d consecutive tasks", consecutiveQuotaExhausted)
+				stopReason = fmt.Sprintf("Quota exhaustion for %d consecutive tasks", consecutiveQuotaExhausted)
 			}
 
 			if shouldStop {
@@ -1059,6 +1086,27 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		if ok {
 			r.Weight = w.Base
 		}
+		if r.FailureClass == "" {
+			r.FailureClass = FailureClassNone
+			switch {
+			case strings.Contains(r.Error, "modified task files"):
+				r.FailureClass = FailureClassIntegrity
+			case strings.Contains(r.Error, "infra failure"):
+				r.FailureClass = FailureClassInfra
+			case strings.Contains(strings.ToLower(r.Error), "timed out"):
+				r.FailureClass = FailureClassValidationTimeout
+			case r.Error != "":
+				r.FailureClass = FailureClassValidationError
+			case r.QuotaExhausted:
+				r.FailureClass = FailureClassQuotaExhausted
+			}
+		}
+		if !r.SelfTestCommandsConfident && r.SelfTestCommands == 0 {
+			r.SelfTestCommandsConfident = true
+		}
+		if !r.OutOfWorkspaceReadsConfident && r.OutOfWorkspaceReadAttempts == 0 {
+			r.OutOfWorkspaceReadsConfident = true
+		}
 		r.Status = task.DetermineStatus(r.Passed, r.AgentTimedOut, r.Error)
 		r.WeightedScore = task.ScoreResult(r.Passed, r.AgentTimedOut, r.Error, w)
 	}
@@ -1098,7 +1146,10 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	var totalWeightedScore float64
 	var maxPossibleScore float64
 	var integrityViolations int
+	var authAffectedTasks int
+	var infraAffectedTasks int
 	var totalSelfTestCommands int
+	var totalInfraRetries int
 	var totalToolchainInstallAttempts int
 	var totalOutOfWorkspaceReadAttempts int
 	var tasksWithSelfTesting int
@@ -1126,6 +1177,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		totalPromptChars += r.PromptChars
 		totalWeightedScore += r.WeightedScore
 		maxPossibleScore += r.Weight
+		totalInfraRetries += r.InfraRetries
 		totalSelfTestCommands += r.SelfTestCommands
 		totalToolchainInstallAttempts += r.ToolchainInstallAttempts
 		totalOutOfWorkspaceReadAttempts += r.OutOfWorkspaceReadAttempts
@@ -1142,6 +1194,12 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		// Count by status
 		if r.Status == task.StatusIntegrityViolation {
 			integrityViolations++
+		}
+		if r.FailureClass == FailureClassAuth {
+			authAffectedTasks++
+		}
+		if r.FailureClass == FailureClassInfra {
+			infraAffectedTasks++
 		}
 
 		addAgg(byLanguage, r.Language, r)
@@ -1173,7 +1231,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	var quotaAffectedTasks int
 	var totalQuotaRetries int
 	for _, r := range results {
-		if r.QuotaExhausted {
+		if r.FailureClass == FailureClassQuotaRecoverable || r.FailureClass == FailureClassQuotaExhausted {
 			quotaAffectedTasks++
 		}
 		totalQuotaRetries += r.QuotaRetries
@@ -1215,7 +1273,10 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		Sandbox:                         evalSandboxActive,
 		Legacy:                          shared.Legacy,
 		QuotaAffectedTasks:              quotaAffectedTasks,
+		AuthAffectedTasks:               authAffectedTasks,
+		InfraAffectedTasks:              infraAffectedTasks,
 		TotalQuotaRetries:               totalQuotaRetries,
+		TotalInfraRetries:               totalInfraRetries,
 		TotalSelfTestCommands:           totalSelfTestCommands,
 		TotalToolchainInstallAttempts:   totalToolchainInstallAttempts,
 		TotalOutOfWorkspaceReadAttempts: totalOutOfWorkspaceReadAttempts,
@@ -1304,25 +1365,15 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 
 }
 
-//nolint:gocognit // Coordinates end-to-end task execution flow in one place for readability.
 func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent, model, outputDir string, timeout int) (result EvalResult) {
 	start := time.Now()
 	weight := task.ComputeWeight(t)
-	result = EvalResult{
-		Task:       t.ID(),
-		Language:   string(t.Language),
-		Tier:       t.Tier,
-		Difficulty: t.Difficulty,
-		Weight:     weight.Base,
-	}
+	result = newEvalResult(t, weight)
 	defer finalizeEvalResult(&result, start, weight)
 
 	loader := task.NewLoader(tasks.FS, tasksDir)
-
-	// Create workspace for this task - use language prefix to avoid slug collisions
-	workspaceName := fmt.Sprintf("%s-%s", t.Language, t.Slug)
-	workspaceDir := filepath.Join(outputDir, workspaceName)
-	result.WorkspaceDir = workspaceDir // Track for cleanup
+	workspaceName, workspaceDir := evalWorkspacePaths(outputDir, t)
+	result.WorkspaceDir = workspaceDir
 
 	// Create an isolated temp workspace for the agent so it cannot read
 	// other eval results or sibling task directories. After the agent
@@ -1349,74 +1400,41 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	// Build agent command
 	prompt := buildAgentPrompt(t, evalUseMCPTools, agentCfg.MCPPrompt)
 	result.PromptChars = utf8.RuneCountInString(prompt)
-
-	agentTimeout := time.Duration(timeout) * time.Second
-	if agentTimeout <= 0 {
-		agentTimeout = 600 * time.Second
-	}
-	// Apply per-agent default timeout as a floor (for agents with buffered output)
-	if agentCfg.DefaultTimeout > 0 {
-		agentMin := time.Duration(agentCfg.DefaultTimeout) * time.Second
-		if agentTimeout < agentMin {
-			agentTimeout = agentMin
-		}
-	}
-	// Use task-specific timeout if set
-	if t.AgentTimeout > 0 {
-		agentTimeout = time.Duration(t.AgentTimeout) * time.Second
-	}
+	agentTimeout := resolveAgentTimeout(timeout, agentCfg.DefaultTimeout, t.AgentTimeout)
 
 	// Place agent.log in the task output directory (eval-results/<run>/<lang>-<slug>/).
 	// This is outside the agent's temp workspace so the agent cannot read it.
-	taskOutputDir := filepath.Join(outputDir, workspaceName)
-	if err := os.MkdirAll(taskOutputDir, 0755); err != nil {
+	taskOutputDir, agentLogPath, validationLogPath, err := ensureEvalTaskOutputPaths(outputDir, workspaceName)
+	if err != nil {
 		result.Error = fmt.Sprintf("creating task output dir: %v", err)
 		return result
 	}
-	agentLogPath := filepath.Join(taskOutputDir, "agent.log")
-	validationLogPath := filepath.Join(taskOutputDir, "validation.log")
 
 	// Execute agent in the isolated temp workspace
 	workspaceReadyAt := time.Now()
 	agentResult := executeAgentWithRetries(ctx, t, agentCfg, prompt, model, agentWorkDir, agentLogPath, agentTimeout, agent, workspaceReadyAt)
-	result.AgentTime = agentResult.totalTime
-	result.AgentTimedOut = agentResult.timedOut
-	result.QuotaRetries = agentResult.quotaRetries
-	result.QuotaExhausted = agentResult.quotaExhausted
-	result.InfraFailure = agentResult.infraFailure
-	metrics := parseAgentBehaviorMetrics(agentLogPath)
-	result.SelfTestCommands = metrics.SelfTestCommands
-	result.ToolchainInstallAttempts = metrics.ToolchainInstallAttempts
-	result.OutOfWorkspaceReadAttempts = metrics.OutOfWorkspaceReads
+	applyAgentExecutionResult(&result, agentResult, agentLogPath, agentWorkDir)
 
 	// If the agent never produced output (infra failure), skip validation entirely.
 	// The task will be excluded from results so it can be resumed later.
-	if agentResult.infraFailure {
-		result.Error = "infra failure: agent produced no output after retries"
+	if shouldSkipValidationForInfra(&result, agentResult.infraFailure) {
 		return result
 	}
 
 	// Ensure the agent didn't modify task-owned files.
-	modified, err := detectModifiedTaskFiles(loader, t, agentWorkDir)
+	integrityViolated, err := detectAndRecordIntegrityViolation(
+		loader,
+		t,
+		taskOutputDir,
+		agentWorkDir,
+		validationLogPath,
+		&result,
+	)
 	if err != nil {
 		result.Error = fmt.Sprintf("integrity check failed: %v", err)
 		return result
 	}
-	if len(modified) > 0 {
-		sort.Strings(modified)
-		result.Error = fmt.Sprintf("modified task files (disallowed): %s", strings.Join(modified, ", "))
-		if err := writeIntegrityViolationArtifacts(taskOutputDir, loader, t, agentWorkDir, modified, result.Error); err != nil {
-			logger.Warn("failed to write integrity artifacts", "task", t.ID(), "error", err)
-		}
-		writeValidationLog(
-			validationLogPath,
-			"",
-			t.ValidationCommand(),
-			-1,
-			0,
-			false,
-			errors.New("skipped due integrity violation"),
-		)
+	if integrityViolated {
 		return result
 	}
 
@@ -1426,35 +1444,174 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 		return result
 	}
 
-	// Add hidden tests (not shown to the agent) before validation.
-	// In legacy mode, hidden tests are already in the workspace from init.
-	if !evalLegacy {
-		if err := writeTaskFilesToWorkspace(loader, t, workspaceDir, t.HiddenTestFiles()); err != nil {
-			result.Error = fmt.Sprintf("writing hidden tests: %v", err)
-			return result
+	if err := writeHiddenTestsIfNeeded(loader, t, workspaceDir); err != nil {
+		result.Error = fmt.Sprintf("writing hidden tests: %v", err)
+		return result
+	}
+
+	validationCmd, effectiveValidationCmd := buildValidationCommands(t)
+	validationTimeout := resolveValidationTimeout(timeout)
+	session, validateDuration, err := runValidationSession(
+		ctx,
+		r,
+		t,
+		workspaceDir,
+		validationTimeout,
+		validationCmd,
+	)
+	result.ValidateTime = validateDuration
+	if err != nil {
+		handleValidationRunError(&result, session, err, validationLogPath, effectiveValidationCmd)
+		return result
+	}
+
+	applyValidationSessionResult(&result, session)
+	writeValidationSessionLog(validationLogPath, effectiveValidationCmd, session)
+	return result
+}
+
+func newEvalResult(t *task.Task, weight task.Weight) EvalResult {
+	return EvalResult{
+		Task:       t.ID(),
+		Language:   string(t.Language),
+		Tier:       t.Tier,
+		Difficulty: t.Difficulty,
+		Weight:     weight.Base,
+	}
+}
+
+func evalWorkspacePaths(outputDir string, t *task.Task) (workspaceName, workspaceDir string) {
+	workspaceName = fmt.Sprintf("%s-%s", t.Language, t.Slug)
+	return workspaceName, filepath.Join(outputDir, workspaceName)
+}
+
+func resolveAgentTimeout(timeoutSeconds, defaultSeconds, taskSeconds int) time.Duration {
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 600 * time.Second
+	}
+	if defaultSeconds > 0 {
+		defaultTimeout := time.Duration(defaultSeconds) * time.Second
+		if timeout < defaultTimeout {
+			timeout = defaultTimeout
 		}
 	}
+	if taskSeconds > 0 {
+		timeout = time.Duration(taskSeconds) * time.Second
+	}
+	return timeout
+}
 
-	// Run sanity harness to validate.
-	// Use at least 120s for validation regardless of the agent timeout,
-	// since some tasks (e.g. Dart isolate tests) need more time to run.
-	validationTimeout := timeout
-	if validationTimeout < 120 {
-		validationTimeout = 120
+func ensureEvalTaskOutputPaths(outputDir, workspaceName string) (taskOutputDir, agentLogPath, validationLogPath string, err error) {
+	taskOutputDir = filepath.Join(outputDir, workspaceName)
+	if err := os.MkdirAll(taskOutputDir, 0o755); err != nil {
+		return "", "", "", err
+	}
+	return taskOutputDir,
+		filepath.Join(taskOutputDir, "agent.log"),
+		filepath.Join(taskOutputDir, "validation.log"),
+		nil
+}
+
+func applyAgentExecutionResult(result *EvalResult, agentResult agentExecutionResult, agentLogPath, workspaceDir string) {
+	result.AgentTime = agentResult.totalTime
+	result.AgentTimedOut = agentResult.timedOut
+	result.QuotaRetries = agentResult.quotaRetries
+	result.InfraRetries = agentResult.infraRetries
+	result.QuotaExhausted = agentResult.quotaExhausted
+	result.InfraFailure = agentResult.infraFailure
+	result.FailureClass = agentResult.failureClass
+
+	metrics := parseAgentBehaviorMetrics(agentLogPath, workspaceDir)
+	result.SelfTestCommands = metrics.SelfTestCommands
+	result.SelfTestCommandsConfident = metrics.SelfTestCommandsConfident
+	result.ToolchainInstallAttempts = metrics.ToolchainInstallAttempts
+	result.OutOfWorkspaceReadAttempts = metrics.OutOfWorkspaceReads
+	result.OutOfWorkspaceReadsConfident = metrics.OutOfWorkspaceReadsConfident
+}
+
+func shouldSkipValidationForInfra(result *EvalResult, infraFailure bool) bool {
+	if !infraFailure {
+		return false
+	}
+	result.Error = "infra failure: agent produced no output after retries"
+	if result.FailureClass == FailureClassNone {
+		result.FailureClass = FailureClassInfra
+	}
+	return true
+}
+
+func detectAndRecordIntegrityViolation(
+	loader *task.Loader,
+	t *task.Task,
+	taskOutputDir, workspaceDir, validationLogPath string,
+	result *EvalResult,
+) (bool, error) {
+	modified, err := detectModifiedTaskFiles(loader, t, workspaceDir)
+	if err != nil {
+		return false, err
+	}
+	if len(modified) == 0 {
+		return false, nil
 	}
 
-	validationCmd := []string(nil)
+	sort.Strings(modified)
+	result.Error = fmt.Sprintf("modified task files (disallowed): %s", strings.Join(modified, ", "))
+	result.FailureClass = FailureClassIntegrity
+
+	if err := writeIntegrityViolationArtifacts(taskOutputDir, loader, t, workspaceDir, modified, result.Error); err != nil {
+		logger.Warn("failed to write integrity artifacts", "task", t.ID(), "error", err)
+	}
+	writeValidationLog(
+		validationLogPath,
+		"",
+		t.ValidationCommand(),
+		-1,
+		0,
+		false,
+		errors.New("skipped due integrity violation"),
+	)
+	return true, nil
+}
+
+func writeHiddenTestsIfNeeded(loader *task.Loader, t *task.Task, workspaceDir string) error {
+	if evalLegacy {
+		return nil
+	}
+	return writeTaskFilesToWorkspace(loader, t, workspaceDir, t.HiddenTestFiles())
+}
+
+func resolveValidationTimeout(timeout int) int {
+	if timeout < 120 {
+		return 120
+	}
+	return timeout
+}
+
+func buildValidationCommands(t *task.Task) (validationCmd, effectiveValidationCmd []string) {
 	if t.Language == task.TypeScript && len(t.HiddenTestFiles()) > 0 {
 		validationCmd = append([]string{}, t.ValidationCommand()...)
 		for _, filename := range t.HiddenTestFiles() {
 			validationCmd = append(validationCmd, task.StripTxtExtension(filename))
 		}
 	}
-	effectiveValidationCmd := t.ValidationCommand()
+
+	effectiveValidationCmd = t.ValidationCommand()
 	if len(validationCmd) > 0 {
 		effectiveValidationCmd = validationCmd
 	}
-	validateStart := time.Now()
+	return validationCmd, effectiveValidationCmd
+}
+
+func runValidationSession(
+	ctx context.Context,
+	r *runner.Runner,
+	t *task.Task,
+	workspaceDir string,
+	validationTimeout int,
+	validationCmd []string,
+) (*resultpkg.Session, float64, error) {
+	start := time.Now()
 	session, err := r.Run(ctx, runner.RunOptions{
 		Task:              t, // Pass task directly to avoid slug collision
 		WorkspaceDir:      workspaceDir,
@@ -1462,45 +1619,97 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 		MaxAttempts:       1,
 		ValidationCommand: validationCmd,
 	})
-	result.ValidateTime = time.Since(validateStart).Seconds()
+	return session, time.Since(start).Seconds(), err
+}
 
-	if err != nil {
-		timedOut := strings.Contains(strings.ToLower(err.Error()), "timed out")
-		rawOutput := ""
-		exitCode := -1
-		duration := time.Duration(result.ValidateTime * float64(time.Second))
-		if session != nil {
-			result.Passed = session.Passed()
-			result.Attempts = len(session.Attempts)
-			if len(session.Attempts) > 0 {
-				lastAttempt := session.Attempts[len(session.Attempts)-1]
-				rawOutput = lastAttempt.RawOutput
-				exitCode = lastAttempt.ExitCode
-				duration = lastAttempt.Duration
-			}
-		}
-		writeValidationLog(validationLogPath, rawOutput, effectiveValidationCmd, exitCode, duration, timedOut, err)
-		result.Error = err.Error()
-		return result
+func handleValidationRunError(
+	result *EvalResult,
+	session *resultpkg.Session,
+	runErr error,
+	validationLogPath string,
+	effectiveValidationCmd []string,
+) {
+	applyValidationSessionResult(result, session)
+	rawOutput, exitCode, duration := validationErrorEvidence(session, result.ValidateTime)
+	timedOut := strings.Contains(strings.ToLower(runErr.Error()), "timed out")
+
+	writeValidationLog(
+		validationLogPath,
+		rawOutput,
+		effectiveValidationCmd,
+		exitCode,
+		duration,
+		timedOut,
+		runErr,
+	)
+
+	result.Error = runErr.Error()
+	if timedOut {
+		result.FailureClass = FailureClassValidationTimeout
+		return
 	}
+	result.FailureClass = FailureClassValidationError
+}
 
+func applyValidationSessionResult(result *EvalResult, session *resultpkg.Session) {
+	if session == nil {
+		return
+	}
 	result.Passed = session.Passed()
 	result.Attempts = len(session.Attempts)
+}
 
-	// Save validation output to validation.log
-	if len(session.Attempts) > 0 {
-		lastAttempt := session.Attempts[len(session.Attempts)-1]
-		writeValidationLog(validationLogPath, lastAttempt.RawOutput, effectiveValidationCmd, lastAttempt.ExitCode, lastAttempt.Duration, lastAttempt.ExitCode == -1, nil)
-	} else {
-		writeValidationLog(validationLogPath, "", effectiveValidationCmd, -1, 0, false, nil)
+func validationErrorEvidence(session *resultpkg.Session, validateSeconds float64) (rawOutput string, exitCode int, duration time.Duration) {
+	rawOutput, exitCode, duration, ok := lastSessionAttempt(session)
+	if ok {
+		return rawOutput, exitCode, duration
 	}
+	return "", -1, time.Duration(validateSeconds * float64(time.Second))
+}
 
-	return result
+func writeValidationSessionLog(validationLogPath string, effectiveValidationCmd []string, session *resultpkg.Session) {
+	rawOutput, exitCode, duration, ok := lastSessionAttempt(session)
+	if !ok {
+		writeValidationLog(validationLogPath, "", effectiveValidationCmd, -1, 0, false, nil)
+		return
+	}
+	writeValidationLog(
+		validationLogPath,
+		rawOutput,
+		effectiveValidationCmd,
+		exitCode,
+		duration,
+		exitCode == -1,
+		nil,
+	)
+}
+
+func lastSessionAttempt(session *resultpkg.Session) (rawOutput string, exitCode int, duration time.Duration, ok bool) {
+	if session == nil || len(session.Attempts) == 0 {
+		return "", 0, 0, false
+	}
+	last := session.Attempts[len(session.Attempts)-1]
+	return last.RawOutput, last.ExitCode, last.Duration, true
 }
 
 // finalizeEvalResult ensures status/score fields are populated for all return paths.
 func finalizeEvalResult(result *EvalResult, start time.Time, weight task.Weight) {
 	result.Duration = time.Since(start).Seconds()
+	if result.FailureClass == "" {
+		result.FailureClass = FailureClassNone
+	}
+	if result.FailureClass == FailureClassNone {
+		switch {
+		case strings.Contains(result.Error, "modified task files"):
+			result.FailureClass = FailureClassIntegrity
+		case strings.Contains(result.Error, "infra failure"):
+			result.FailureClass = FailureClassInfra
+		case strings.Contains(strings.ToLower(result.Error), "timed out"):
+			result.FailureClass = FailureClassValidationTimeout
+		case result.Error != "":
+			result.FailureClass = FailureClassValidationError
+		}
+	}
 	result.Status = task.DetermineStatus(result.Passed, result.AgentTimedOut, result.Error)
 	result.WeightedScore = task.ScoreResult(result.Passed, result.AgentTimedOut, result.Error, weight)
 }
@@ -1513,6 +1722,7 @@ type agentExecutionResult struct {
 	quotaExhausted bool
 	infraRetries   int
 	infraFailure   bool // true when agent produced no output after all retries
+	failureClass   FailureClass
 }
 
 // executeAgentWithRetries runs the agent command with quota-aware retry logic.
@@ -1566,18 +1776,28 @@ func executeAgentWithRetries(
 		result.totalTime += attemptResult.duration
 		result.timedOut = attemptResult.timedOut
 
-		// Check for quota errors first.
+		// Check non-recoverable auth errors first (no retries).
+		if detectAuthError(agentLogPath) {
+			result.failureClass = FailureClassAuth
+			logger.Debug("authentication error, skipping retries", "task", t.ID())
+			break
+		}
+
+		// Check quota/provider errors.
 		hasError, isRecoverable := detectQuotaError(agentLogPath)
 		if hasError {
 			if !isRecoverable {
 				result.quotaExhausted = true
+				result.failureClass = FailureClassQuotaExhausted
 				logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
 				break
 			}
 			quotaAttempts++
 			result.quotaRetries = quotaAttempts
+			result.failureClass = FailureClassQuotaRecoverable
 			if quotaAttempts >= quotaMaxRetries {
 				result.quotaExhausted = true
+				result.failureClass = FailureClassQuotaExhausted
 				logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
 				break
 			}
@@ -1590,8 +1810,8 @@ func executeAgentWithRetries(
 			infraAttempts++
 			result.infraRetries = infraAttempts
 			if infraAttempts >= infraMaxRetries {
-				result.quotaExhausted = true
 				result.infraFailure = true
+				result.failureClass = FailureClassInfra
 				logger.Debug("max infra retries reached", "task", t.ID(), "retries", infraMaxRetries)
 				break
 			}
@@ -1600,6 +1820,9 @@ func executeAgentWithRetries(
 		}
 
 		// Success — no quota error, no infra failure.
+		if result.failureClass == "" {
+			result.failureClass = FailureClassNone
+		}
 		break
 	}
 
@@ -2782,7 +3005,10 @@ type LeaderboardSubmission struct {
 	Sandbox                         bool `json:"sandbox"`
 	Legacy                          bool `json:"legacy"`
 	QuotaAffectedTasks              int  `json:"quota_affected_tasks"`
+	AuthAffectedTasks               int  `json:"auth_affected_tasks"`
+	InfraAffectedTasks              int  `json:"infra_affected_tasks"`
 	TotalQuotaRetries               int  `json:"total_quota_retries"`
+	TotalInfraRetries               int  `json:"total_infra_retries"`
 	TotalSelfTestCommands           int  `json:"total_self_test_commands"`
 	TotalToolchainInstallAttempts   int  `json:"total_toolchain_install_attempts"`
 	TotalOutOfWorkspaceReadAttempts int  `json:"total_out_of_workspace_read_attempts"`
@@ -2823,7 +3049,10 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		Sandbox:                         summary.Sandbox,
 		Legacy:                          summary.Legacy,
 		QuotaAffectedTasks:              summary.QuotaAffectedTasks,
+		AuthAffectedTasks:               summary.AuthAffectedTasks,
+		InfraAffectedTasks:              summary.InfraAffectedTasks,
 		TotalQuotaRetries:               summary.TotalQuotaRetries,
+		TotalInfraRetries:               summary.TotalInfraRetries,
 		TotalSelfTestCommands:           summary.TotalSelfTestCommands,
 		TotalToolchainInstallAttempts:   summary.TotalToolchainInstallAttempts,
 		TotalOutOfWorkspaceReadAttempts: summary.TotalOutOfWorkspaceReadAttempts,
@@ -2908,6 +3137,29 @@ func writeReportQuality(sb *strings.Builder, summary EvalSummary) {
 	sb.WriteString("## Quality Breakdown\n\n")
 	fmt.Fprintf(sb, "- **Integrity Violations** (modified test files): %d\n", summary.IntegrityViolations)
 	fmt.Fprintf(sb, "- **Failures**: %d\n", summary.Failed-summary.IntegrityViolations)
+	fmt.Fprintf(sb, "- **Quota-affected tasks**: %d\n", summary.QuotaAffectedTasks)
+	fmt.Fprintf(sb, "- **Auth-affected tasks**: %d\n", summary.AuthAffectedTasks)
+	fmt.Fprintf(sb, "- **Infra-affected tasks**: %d\n", summary.InfraAffectedTasks)
+
+	failureCounts := make(map[FailureClass]int)
+	for _, r := range summary.Results {
+		if r.FailureClass == FailureClassNone {
+			continue
+		}
+		failureCounts[r.FailureClass]++
+	}
+	if len(failureCounts) > 0 {
+		sb.WriteString("\n| Failure Class | Tasks |\n")
+		sb.WriteString("|---------------|-------|\n")
+		keys := make([]string, 0, len(failureCounts))
+		for class := range failureCounts {
+			keys = append(keys, string(class))
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(sb, "| %s | %d |\n", key, failureCounts[FailureClass(key)])
+		}
+	}
 	sb.WriteString("\n")
 }
 
@@ -2932,19 +3184,21 @@ func writeReportBehaviorTelemetry(sb *strings.Builder, summary EvalSummary) {
 		return
 	}
 
-	sb.WriteString("\n| Task | Self Tests | Tool Installs | Out-of-Workspace Reads |\n")
-	sb.WriteString("|------|------------|---------------|-------------------------|\n")
+	sb.WriteString("\n| Task | Self Tests | Self Test Conf. | Tool Installs | Out-of-Workspace Reads | Out-of-Workspace Conf. |\n")
+	sb.WriteString("|------|------------|-----------------|---------------|-------------------------|------------------------|\n")
 	for _, r := range summary.Results {
 		if r.SelfTestCommands == 0 && r.ToolchainInstallAttempts == 0 && r.OutOfWorkspaceReadAttempts == 0 {
 			continue
 		}
 		fmt.Fprintf(
 			sb,
-			"| %s | %d | %d | %d |\n",
+			"| %s | %d | %t | %d | %d | %t |\n",
 			r.Task,
 			r.SelfTestCommands,
+			r.SelfTestCommandsConfident,
 			r.ToolchainInstallAttempts,
 			r.OutOfWorkspaceReadAttempts,
+			r.OutOfWorkspaceReadsConfident,
 		)
 	}
 	sb.WriteString("\n")
@@ -3038,17 +3292,149 @@ func writeReportVerification(sb *strings.Builder, attestation *EvalAttestation) 
 	sb.WriteString("\n")
 }
 
-func parseAgentBehaviorMetrics(logPath string) agentBehaviorMetrics {
+func parseAgentBehaviorMetrics(logPath, workspaceDir string) agentBehaviorMetrics {
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return agentBehaviorMetrics{}
 	}
 	content := string(data)
-	return agentBehaviorMetrics{
-		SelfTestCommands:         countMatchingLines(content, selfTestCommandPatterns),
-		ToolchainInstallAttempts: countMatchingLines(content, toolchainInstallPatterns),
-		OutOfWorkspaceReads:      countMatchingLines(content, outOfWorkspaceReadPatterns),
+	lines := strings.Split(content, "\n")
+	commands := extractCommandLines(lines)
+
+	selfTests, selfConfident := countCommandMatches(commands, selfTestCommandPatterns)
+	toolchainInstalls, toolchainConfident := countCommandMatches(commands, toolchainInstallPatterns)
+	outReads, outReadsConfident := countOutOfWorkspaceReads(commands, workspaceDir)
+
+	// Fallback to broad line matching when command extraction fails.
+	if !selfConfident {
+		selfTests = countMatchingLines(content, selfTestCommandPatterns)
 	}
+	if !outReadsConfident {
+		outReads = countMatchingLines(content, outOfWorkspaceReadPatterns)
+	}
+	if !toolchainConfident {
+		toolchainInstalls = countMatchingLines(content, toolchainInstallPatterns)
+	}
+	if !selfConfident && selfTests == 0 {
+		selfConfident = true
+	}
+	if !outReadsConfident && outReads == 0 {
+		outReadsConfident = true
+	}
+
+	return agentBehaviorMetrics{
+		SelfTestCommands:             selfTests,
+		SelfTestCommandsConfident:    selfConfident,
+		ToolchainInstallAttempts:     toolchainInstalls,
+		OutOfWorkspaceReads:          outReads,
+		OutOfWorkspaceReadsConfident: outReadsConfident,
+	}
+}
+
+func extractCommandLines(lines []string) []string {
+	commands := make([]string, 0, len(lines))
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(ansiEscapePattern.ReplaceAllString(rawLine, ""))
+		if line == "" {
+			continue
+		}
+
+		if matches := bashLCPattern.FindStringSubmatch(line); len(matches) == 2 {
+			commands = append(commands, strings.TrimSpace(matches[1]))
+			continue
+		}
+
+		// Supports shell-style logs such as "$ go test ./..." and decorated variants.
+		if idx := strings.Index(line, "$ "); idx >= 0 {
+			cmd := strings.TrimSpace(line[idx+2:])
+			if cmd != "" {
+				commands = append(commands, cmd)
+			}
+		}
+	}
+	return commands
+}
+
+func countCommandMatches(commands []string, patterns []*regexp.Regexp) (int, bool) {
+	if len(commands) == 0 {
+		return 0, false
+	}
+	count := 0
+	for _, cmd := range commands {
+		for _, re := range patterns {
+			if re.MatchString(cmd) {
+				count++
+				break
+			}
+		}
+	}
+	return count, true
+}
+
+func countOutOfWorkspaceReads(commands []string, workspaceDir string) (int, bool) {
+	if len(commands) == 0 {
+		return 0, false
+	}
+
+	workspaceAbs := workspaceDir
+	if workspaceAbs != "" {
+		if abs, err := filepath.Abs(workspaceAbs); err == nil {
+			workspaceAbs = canonicalizeExistingPath(abs)
+		}
+	}
+
+	count := 0
+	for _, cmd := range commands {
+		paths := extractAbsolutePathsFromCommand(cmd)
+		if len(paths) == 0 {
+			continue
+		}
+		if commandReadsOutsideWorkspace(paths, workspaceAbs) {
+			count++
+		}
+	}
+	return count, true
+}
+
+func extractAbsolutePathsFromCommand(cmd string) []string {
+	matches := absolutePathPattern.FindAllStringSubmatch(cmd, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		p := strings.TrimRight(match[2], ",.:)")
+		if p == "" || !filepath.IsAbs(p) {
+			continue
+		}
+		p = filepath.Clean(p)
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+func commandReadsOutsideWorkspace(paths []string, workspaceAbs string) bool {
+	for _, p := range paths {
+		if p == "/" {
+			return true
+		}
+		if workspaceAbs == "" {
+			return true
+		}
+		if p == workspaceAbs || strings.HasPrefix(p, workspaceAbs+string(os.PathSeparator)) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func countMatchingLines(content string, patterns []*regexp.Regexp) int {
@@ -3126,6 +3512,21 @@ func canonicalizeExistingPath(path string) string {
 	return resolved
 }
 
+// detectAuthError checks if agent log contains auth/authz errors.
+func detectAuthError(logPath string) bool {
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(content))
+	for _, pattern := range authFailurePatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // detectQuotaError checks if agent log contains rate limit or quota errors.
 // Returns (hasError, isRecoverable) where hasError indicates if any quota/rate
 // limit pattern was found, and isRecoverable indicates if the error is transient.
@@ -3138,7 +3539,7 @@ func detectQuotaError(logPath string) (bool, bool) {
 	lower := strings.ToLower(string(content))
 
 	// Check for non-recoverable patterns first
-	for _, pattern := range nonRecoverablePatterns {
+	for _, pattern := range nonRecoverableQuotaPatterns {
 		if strings.Contains(lower, pattern) {
 			return true, false // Error found, NOT recoverable
 		}

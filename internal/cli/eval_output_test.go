@@ -34,7 +34,10 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 		Sandbox:                         false,
 		Legacy:                          false,
 		QuotaAffectedTasks:              0,
+		AuthAffectedTasks:               1,
+		InfraAffectedTasks:              2,
 		TotalQuotaRetries:               0,
+		TotalInfraRetries:               3,
 		TotalSelfTestCommands:           17,
 		TotalToolchainInstallAttempts:   2,
 		TotalOutOfWorkspaceReadAttempts: 3,
@@ -57,8 +60,17 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 	if submission.QuotaAffectedTasks != 0 {
 		t.Fatalf("quota_affected_tasks = %d, want 0", submission.QuotaAffectedTasks)
 	}
+	if submission.AuthAffectedTasks != 1 {
+		t.Fatalf("auth_affected_tasks = %d, want 1", submission.AuthAffectedTasks)
+	}
+	if submission.InfraAffectedTasks != 2 {
+		t.Fatalf("infra_affected_tasks = %d, want 2", submission.InfraAffectedTasks)
+	}
 	if submission.TotalQuotaRetries != 0 {
 		t.Fatalf("total_quota_retries = %d, want 0", submission.TotalQuotaRetries)
+	}
+	if submission.TotalInfraRetries != 3 {
+		t.Fatalf("total_infra_retries = %d, want 3", submission.TotalInfraRetries)
 	}
 	if submission.TotalSelfTestCommands != 17 {
 		t.Fatalf("total_self_test_commands = %d, want 17", submission.TotalSelfTestCommands)
@@ -133,7 +145,10 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		Sandbox:                         false,
 		Legacy:                          false,
 		QuotaAffectedTasks:              0,
+		AuthAffectedTasks:               0,
+		InfraAffectedTasks:              0,
 		TotalQuotaRetries:               0,
+		TotalInfraRetries:               0,
 		TotalSelfTestCommands:           0,
 		TotalToolchainInstallAttempts:   0,
 		TotalOutOfWorkspaceReadAttempts: 0,
@@ -156,7 +171,10 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		`"sandbox":false`,
 		`"legacy":false`,
 		`"quota_affected_tasks":0`,
+		`"auth_affected_tasks":0`,
+		`"infra_affected_tasks":0`,
 		`"total_quota_retries":0`,
+		`"total_infra_retries":0`,
 		`"total_self_test_commands":0`,
 		`"total_toolchain_install_attempts":0`,
 		`"total_out_of_workspace_read_attempts":0`,

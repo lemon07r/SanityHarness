@@ -757,7 +757,7 @@ func TestDetectQuotaError(t *testing.T) {
 		{
 			name:            "non-recoverable api key",
 			content:         "invalid api key provided",
-			wantHasError:    true,
+			wantHasError:    false,
 			wantRecoverable: false,
 		},
 		{
@@ -831,6 +831,58 @@ func TestDetectQuotaError(t *testing.T) {
 			}
 			if isRecoverable != tc.wantRecoverable {
 				t.Errorf("isRecoverable = %v, want %v", isRecoverable, tc.wantRecoverable)
+			}
+		})
+	}
+}
+
+func TestDetectAuthError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		content  string
+		wantAuth bool
+	}{
+		{
+			name:     "authentication failed",
+			content:  "Authentication failed. Please login again.",
+			wantAuth: true,
+		},
+		{
+			name:     "forbidden",
+			content:  "HTTP 403 forbidden from provider",
+			wantAuth: true,
+		},
+		{
+			name:     "invalid api key",
+			content:  "invalid api key provided",
+			wantAuth: true,
+		},
+		{
+			name:     "rate limit is not auth",
+			content:  "too many requests, slow down",
+			wantAuth: false,
+		},
+		{
+			name:     "normal log",
+			content:  "task completed successfully",
+			wantAuth: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpFile := filepath.Join(t.TempDir(), "agent.log")
+			if err := os.WriteFile(tmpFile, []byte(tc.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			got := detectAuthError(tmpFile)
+			if got != tc.wantAuth {
+				t.Fatalf("detectAuthError() = %v, want %v", got, tc.wantAuth)
 			}
 		})
 	}
@@ -1263,11 +1315,18 @@ func TestResolveSandboxDenylistPathsCanonicalizesSymlinkRepoRoot(t *testing.T) {
 func TestParseAgentBehaviorMetrics(t *testing.T) {
 	t.Parallel()
 
-	logPath := filepath.Join(t.TempDir(), "agent.log")
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "agent.log")
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
 	content := strings.Join([]string{
 		"$ go test ./...",
 		"$ cargo test",
 		"$ curl -sL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar xJ",
+		"$ ls -la " + workspaceDir,
 		"$ find / -name zig -type f 2>/dev/null | head -5",
 		"/home/user/project/eval-results/old-run",
 	}, "\n")
@@ -1275,14 +1334,42 @@ func TestParseAgentBehaviorMetrics(t *testing.T) {
 		t.Fatalf("write log: %v", err)
 	}
 
-	metrics := parseAgentBehaviorMetrics(logPath)
+	metrics := parseAgentBehaviorMetrics(logPath, workspaceDir)
 	if metrics.SelfTestCommands != 2 {
 		t.Fatalf("self test commands = %d, want 2", metrics.SelfTestCommands)
 	}
 	if metrics.ToolchainInstallAttempts != 1 {
 		t.Fatalf("toolchain install attempts = %d, want 1", metrics.ToolchainInstallAttempts)
 	}
-	if metrics.OutOfWorkspaceReads != 2 {
-		t.Fatalf("out-of-workspace reads = %d, want 2", metrics.OutOfWorkspaceReads)
+	if metrics.OutOfWorkspaceReads != 1 {
+		t.Fatalf("out-of-workspace reads = %d, want 1", metrics.OutOfWorkspaceReads)
+	}
+	if !metrics.SelfTestCommandsConfident {
+		t.Fatal("self-test confidence = false, want true")
+	}
+	if !metrics.OutOfWorkspaceReadsConfident {
+		t.Fatal("out-of-workspace confidence = false, want true")
+	}
+}
+
+func TestParseAgentBehaviorMetricsFallbackConfidence(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "agent.log")
+	content := strings.Join([]string{
+		"reviewing /home/user/eval-results/run-1",
+		"checking /sessions/old",
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	metrics := parseAgentBehaviorMetrics(logPath, filepath.Join(tmpDir, "workspace"))
+	if metrics.OutOfWorkspaceReads == 0 {
+		t.Fatal("out-of-workspace reads = 0, want > 0 from fallback matcher")
+	}
+	if metrics.OutOfWorkspaceReadsConfident {
+		t.Fatal("out-of-workspace confidence = true, want false for fallback parsing")
 	}
 }
