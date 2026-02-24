@@ -2105,6 +2105,30 @@ func buildAgentPrompt(t *task.Task, useMCPTools bool, mcpPrompt string) string {
 		testFiles = append(testFiles, task.StripTxtExtension(f))
 	}
 
+	// The generic MCP guidance is injected into existing sections when enabled.
+	// Agent-specific MCP text is intentionally ignored to keep this prompt path uniform.
+	_ = mcpPrompt
+
+	mcpEnvironmentLine := ""
+	mcpImportantLine := ""
+	mcpRuleLine := ""
+	taskInstructions := `1. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
+2. Read the visible test file(s) to understand expected behavior and edge cases.
+3. Implement the stub file(s), replacing placeholders with working code.
+4. Ensure your solution handles edge cases and performance constraints.
+5. Ensure thread-safety if the tests use concurrent operations.`
+	if useMCPTools {
+		mcpEnvironmentLine = "\n- You have access to MCP tools. Review what is available to you before starting work."
+		taskInstructions = `1. Use your MCP tools to help complete your task(s) wherever and whenever applicable.
+2. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
+3. Read the visible test file(s) to understand expected behavior and edge cases.
+4. Implement the stub file(s), replacing placeholders with working code.
+5. Ensure your solution handles edge cases and performance constraints.
+6. Ensure thread-safety if the tests use concurrent operations.`
+		mcpImportantLine = "\n- Prefer your MCP tools over built-in alternatives if both can accomplish the same step or objective."
+		mcpRuleLine = "\n- You MUST actively use your MCP tools to assist you with your work. Do NOT ignore them. Make your first MCP tool call before writing any code."
+	}
+
 	prompt := fmt.Sprintf(`You are solving a coding task called "%s".
 
 TASK INFO:
@@ -2121,38 +2145,23 @@ ENVIRONMENT:
 - Final validation runs automatically in a Docker container.
 - Toolchain: %s
 - You may run local tests/commands in the workspace while iterating.
-- Toolchains are preinstalled; extra installs are optional.
+- Toolchains are preinstalled; extra installs are optional.%s
 
 YOUR TASK:
-1. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
-2. Read the visible test file(s) to understand expected behavior and edge cases.
-3. Implement the stub file(s), replacing placeholders with working code.
-4. Ensure your solution handles edge cases and performance constraints.
-5. Ensure thread-safety if the tests use concurrent operations.
+%s
 
 IMPORTANT:
-- There may be hidden tests that check additional edge cases for the same public API.
+- There may be hidden tests that check additional edge cases for the same public API.%s
 
 RULES:
 - ONLY edit the stub/solution source file(s).
 - Do NOT modify test files or support files.
 - You may add new helper source files if needed.
 - Evaluation fails if you modify protected files.
-- Do NOT navigate to parent directories or read files outside the workspace.`,
+- Do NOT navigate to parent directories or read files outside the workspace.%s`,
 		t.Name, t.Language, t.Tier, t.Difficulty, t.Description,
 		strings.Join(stubFiles, ", "), strings.Join(testFiles, ", "),
-		toolchainInfo(t.Language))
-
-	// Append MCP tools section if enabled
-	if useMCPTools {
-		prompt += `
-
-MCP TOOLS:
-Before beginning work, review all available MCP tools, and assess their full capabilities. Factor them into your approach, and use them proactively as possible whenever and wherever is most suitable. You MUST use any of your MCP tools at least once to help complete the task.`
-		if mcpPrompt != "" {
-			prompt += "\n\nAGENT-SPECIFIC TOOLS:\n" + mcpPrompt
-		}
-	}
+		toolchainInfo(t.Language), mcpEnvironmentLine, taskInstructions, mcpImportantLine, mcpRuleLine)
 
 	return prompt
 }

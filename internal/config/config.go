@@ -46,6 +46,7 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition:     "after",
 		ReasoningFlag:         "--variant",
 		ReasoningFlagPosition: "after",
+		MCPPrompt:             "Your environment includes additional MCP tools. Incorporate them into your workflow the same way you would any built-in command. If an MCP tool can do something more reliably or with better context than your default approach, prefer it.",
 	},
 	"claude": {
 		Command:           "claude",

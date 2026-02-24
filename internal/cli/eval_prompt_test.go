@@ -77,18 +77,40 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 
 	// Test without MCP tools
 	promptWithoutMCP := buildAgentPrompt(tt, false, "")
-	if strings.Contains(promptWithoutMCP, "MCP TOOLS:") {
-		t.Fatalf("prompt without MCP tools should not contain MCP section\n\nPrompt:\n%s", promptWithoutMCP)
+	for _, forbidden := range []string{
+		"You have access to MCP tools. Review what is available to you before starting work.",
+		"1. Use your MCP tools to help complete your task(s) wherever and whenever applicable.",
+		"Prefer your MCP tools over built-in alternatives if both can accomplish the same step or objective.",
+		"You MUST actively use your MCP tools to assist you with your work. Do NOT ignore them. Make your first MCP tool call before writing any code.",
+		"MCP TOOLS:",
+		"AGENT-SPECIFIC TOOLS:",
+	} {
+		if strings.Contains(promptWithoutMCP, forbidden) {
+			t.Fatalf("prompt without MCP tools should not contain %q\n\nPrompt:\n%s", forbidden, promptWithoutMCP)
+		}
 	}
 
 	// Test with MCP tools
-	promptWithMCP := buildAgentPrompt(tt, true, "")
+	promptWithMCP := buildAgentPrompt(tt, true, "agent-specific text should not appear")
 	for _, s := range []string{
-		"MCP TOOLS:",
-		"proactively as possible",
+		"- You have access to MCP tools. Review what is available to you before starting work.",
+		"1. Use your MCP tools to help complete your task(s) wherever and whenever applicable.",
+		"2. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).",
+		"6. Ensure thread-safety if the tests use concurrent operations.",
+		"- Prefer your MCP tools over built-in alternatives if both can accomplish the same step or objective.",
+		"- You MUST actively use your MCP tools to assist you with your work. Do NOT ignore them. Make your first MCP tool call before writing any code.",
 	} {
 		if !strings.Contains(promptWithMCP, s) {
 			t.Fatalf("prompt with MCP tools missing %q\n\nPrompt:\n%s", s, promptWithMCP)
+		}
+	}
+	for _, forbidden := range []string{
+		"MCP TOOLS:",
+		"AGENT-SPECIFIC TOOLS:",
+		"agent-specific text should not appear",
+	} {
+		if strings.Contains(promptWithMCP, forbidden) {
+			t.Fatalf("prompt with MCP tools should not contain %q\n\nPrompt:\n%s", forbidden, promptWithMCP)
 		}
 	}
 }
