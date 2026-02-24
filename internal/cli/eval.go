@@ -384,6 +384,7 @@ Examples:
   sanity eval --agent gemini
   sanity eval --agent kilocode
   sanity eval --agent gemini --model gemini-2.5-pro
+  sanity eval --agent gemini --repeat 3
   sanity eval --agent opencode --model google/gemini-2.5-flash
   sanity eval --agent claude --lang go
   sanity eval --agent my-custom-agent --tasks bank-account,react

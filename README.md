@@ -37,6 +37,7 @@ A lightweight evaluation harness for coding agents that runs high-signal, compac
 - **Watch Mode**: Automatically re-run tests on file changes
 - **Hidden Tests**: Additional validation applied only during eval
 - **Parallel Eval**: Run multiple tasks concurrently with `--parallel`
+- **Repeated Eval Runs**: Repeat the same configuration with `--repeat N`
 - **Agent Sandboxing**: Bubblewrap isolation restricts agents to their workspace
 - **Persistent Caches**: Speed up builds with `.sanity-cache/` mounts
 
@@ -99,6 +100,7 @@ make build    # Build the CLI
 ./sanity eval --agent gemini --model gemini-3-pro     # Specify model
 ./sanity eval --agent gemini --tier all --parallel 4  # All tasks, 4 concurrent
 ./sanity eval --agent gemini --dry-run                # Preview without running
+./sanity eval --agent gemini --repeat 3               # Repeat same eval config 3 times
 ./sanity eval --agent droid --reasoning high          # Set reasoning effort
 ./sanity eval --agent gemini --use-mcp-tools          # Enable MCP tools
 ./sanity eval --agent opencode --disable-mcp          # Disable MCP tools / currently only supported for opencode
