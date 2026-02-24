@@ -166,6 +166,16 @@ func TestBuildAgentPromptIncludesToolchainInfo(t *testing.T) {
 	}
 }
 
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, v := range env {
+		if strings.HasPrefix(v, prefix) {
+			return strings.TrimPrefix(v, prefix), true
+		}
+	}
+	return "", false
+}
+
 func TestBuildAgentCommandDisableMCP(t *testing.T) {
 	t.Parallel()
 
@@ -174,83 +184,87 @@ func TestBuildAgentCommandDisableMCP(t *testing.T) {
 		Args:    []string{"run", "{prompt}"},
 	}
 
+	tests := []struct {
+		name           string
+		disableMCP     bool
+		useMCPTools    bool
+		agentName      string
+		wantConfig     bool
+		wantSubstrings []string
+	}{
+		{
+			name:           "disable_mcp_for_opencode_sets_config",
+			disableMCP:     true,
+			agentName:      "opencode",
+			wantConfig:     true,
+			wantSubstrings: []string{`"tools"`, `"*_*":false`},
+		},
+		{
+			name:       "disable_mcp_for_non_opencode_does_not_set_config",
+			disableMCP: true,
+			agentName:  "gemini",
+			wantConfig: false,
+		},
+		{
+			name:           "use_mcp_tools_for_opencode_sets_timeout_config",
+			useMCPTools:    true,
+			agentName:      "opencode",
+			wantConfig:     true,
+			wantSubstrings: []string{`"experimental"`, `"mcp_timeout"`, "180000"},
+		},
+		{
+			name:       "neither_flag_for_opencode_does_not_set_config",
+			agentName:  "opencode",
+			wantConfig: false,
+		},
+		{
+			name:           "both_flags_for_opencode_set_combined_config",
+			disableMCP:     true,
+			useMCPTools:    true,
+			agentName:      "opencode",
+			wantConfig:     true,
+			wantSubstrings: []string{`"*_*":false`, `"mcp_timeout"`},
+		},
+	}
+
 	ctx := context.Background()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Test with disableMCP=true for opencode - should inject OPENCODE_CONFIG_CONTENT
-	cmd := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, false, "opencode")
-
-	found := false
-	for _, env := range cmd.Env {
-		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
-			found = true
-			if !strings.Contains(env, `"tools"`) {
-				t.Error("expected tools config in OPENCODE_CONFIG_CONTENT")
+			cmd := buildAgentCommand(
+				ctx,
+				agentCfg,
+				"test prompt",
+				"",
+				"",
+				tc.disableMCP,
+				tc.useMCPTools,
+				tc.agentName,
+			)
+			configValue, ok := envValue(cmd.Env, "OPENCODE_CONFIG_CONTENT")
+			if tc.wantConfig && !ok {
+				t.Fatalf(
+					"expected OPENCODE_CONFIG_CONTENT to be set (disableMCP=%t useMCPTools=%t agent=%s)",
+					tc.disableMCP,
+					tc.useMCPTools,
+					tc.agentName,
+				)
 			}
-			if !strings.Contains(env, `"*_*":false`) {
-				t.Error("expected *_* glob pattern to disable MCP tools")
+			if !tc.wantConfig && ok {
+				t.Fatalf(
+					"did not expect OPENCODE_CONFIG_CONTENT to be set (disableMCP=%t useMCPTools=%t agent=%s)",
+					tc.disableMCP,
+					tc.useMCPTools,
+					tc.agentName,
+				)
 			}
-			break
-		}
-	}
-	if !found {
-		t.Error("expected OPENCODE_CONFIG_CONTENT to be set when disableMCP=true for opencode")
-	}
-
-	// Test with disableMCP=true for non-opencode agent - should not inject
-	cmd2 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, false, "gemini")
-	for _, env := range cmd2.Env {
-		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
-			t.Error("should not set OPENCODE_CONFIG_CONTENT for non-opencode agents")
-		}
-	}
-
-	// Test with useMCPTools=true for opencode - should inject timeout override
-	cmd3 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, true, "opencode")
-	found = false
-	for _, env := range cmd3.Env {
-		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
-			found = true
-			if !strings.Contains(env, `"experimental"`) {
-				t.Error("expected experimental config in OPENCODE_CONFIG_CONTENT")
+			for _, want := range tc.wantSubstrings {
+				if !strings.Contains(configValue, want) {
+					t.Errorf("expected OPENCODE_CONFIG_CONTENT to include %q, got %q", want, configValue)
+				}
 			}
-			if !strings.Contains(env, `"mcp_timeout"`) {
-				t.Error("expected mcp_timeout in OPENCODE_CONFIG_CONTENT")
-			}
-			if !strings.Contains(env, "180000") {
-				t.Error("expected mcp_timeout to be set to 180000")
-			}
-			break
-		}
-	}
-	if !found {
-		t.Error("expected OPENCODE_CONFIG_CONTENT to be set when useMCPTools=true for opencode")
-	}
-
-	// Test with disableMCP=false and useMCPTools=false for opencode - should not inject
-	cmd4 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", false, false, "opencode")
-	for _, env := range cmd4.Env {
-		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
-			t.Error("should not set OPENCODE_CONFIG_CONTENT when disableMCP=false and useMCPTools=false")
-		}
-	}
-
-	// Test with disableMCP=true and useMCPTools=true for opencode - should include both overrides
-	cmd5 := buildAgentCommand(ctx, agentCfg, "test prompt", "", "", true, true, "opencode")
-	found = false
-	for _, env := range cmd5.Env {
-		if strings.HasPrefix(env, "OPENCODE_CONFIG_CONTENT=") {
-			found = true
-			if !strings.Contains(env, `"*_*":false`) {
-				t.Error("expected *_* glob pattern to disable MCP tools")
-			}
-			if !strings.Contains(env, `"mcp_timeout"`) {
-				t.Error("expected mcp_timeout in combined OPENCODE_CONFIG_CONTENT")
-			}
-			break
-		}
-	}
-	if !found {
-		t.Error("expected OPENCODE_CONFIG_CONTENT to be set when both disableMCP and useMCPTools are true")
+		})
 	}
 }
 
