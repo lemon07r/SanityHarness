@@ -84,7 +84,7 @@ Single eval runs are useful for quick checks, but meaningful comparison requires
 
 The internal change that enables all of this is the extraction of the monolithic `evalCmd.RunE` into a reusable `evalRunSingle()` function. The top-level `RunE` is now a thin orchestration wrapper that parses multi-agent specs, manages the multi-run directory structure, and delegates individual runs.
 
-Multi-run directories use a `multi-run.json` config and `multi-run-state.json` for resume support. Interrupted multi-runs can be resumed with `--resume`, which detects completed sub-runs and continues from where it left off.
+Multi-run directories use a `multi-run-config.json` config and `multi-run-state.json` for resume support. Interrupted multi-runs can be resumed with `--resume`, which detects completed sub-runs and continues from where it left off.
 
 Phase 5 (parallel runs with `--parallel-runs`) is deferred to a future release.
 
@@ -99,6 +99,40 @@ This pre-release focuses on making the harness reliable on `arm64` hosts while k
 Operationally, this means ARM users get deterministic behavior:
 - either a matching image runs normally,
 - or the harness exits with an actionable platform mismatch message telling you to publish/build the needed architecture or override image config.
+
+## What changed in v1.8.0-alpha.4 — output contracts and auditability
+
+This pre-release tightened output invariants so resume/verification tooling and downstream parsers can rely on stable files even in edge cases.
+
+- `agent.log` now gets a deterministic `HARNESS:` timeout footer when the agent times out.
+- `validation.log` is now always written and always ends with a `HARNESS:` footer (`command`, `exit_code`, `duration_seconds`, `timed_out`, optional `run_error`), even when raw validator output is empty.
+- `run-config.json`, `summary.json`, and `submission.json` now emit key boolean/counter fields explicitly even when false/zero (for example `use_mcp_tools`, `disable_mcp`, `no_sandbox`, `legacy`, and retry counters). This avoids schema drift across runs.
+- Validation commands were normalized for several tasks so task contracts, execution behavior, and log metadata stay aligned.
+
+The net effect is better auditability and fewer ambiguous "empty log" outcomes.
+
+## What changed in v1.8.0-alpha.5 and alpha.6 — sandbox hardening
+
+The sandbox model moved from a narrow writable-dir override to an explicit compatibility allowlist plus stricter masking.
+
+- Added `[sandbox] shared_readwrite_dirs` and `[sandbox] shared_readonly_dirs` to configuration, with broad defaults covering common auth/cache/toolchain locations.
+- Bubblewrap setup now masks non-allowlisted top-level directories under `$HOME`, then bind-mounts allowlisted paths with explicit read/write or read-only intent.
+- Denylist masking was expanded for sensitive host paths (including `tasks`, `eval-results`, and `sessions`), with extra entries configurable via `[sandbox] readable_denylist`.
+- Fixed a symlink canonicalization regression in denylist handling so masked paths remain masked even when traversed through symlinked parents.
+
+This keeps agents functional (expected config/cache access still works) while reducing exposure to unrelated host data.
+
+## What changed after v1.8.0-alpha.6 — failure taxonomy, telemetry, and resumable externals
+
+Recent `1.8.x` work focused on separating model failures from provider/auth/infra failures and making that visible in outputs.
+
+- Added `FailureClass` to per-task results: `none`, `quota_recoverable`, `quota_exhausted`, `auth`, `infra`, `integrity`, `validation_error`, `validation_timeout`.
+- External failures (`auth`, `quota_exhausted`, `infra`) are now treated as resumable skips: they are excluded from pass/fail scoring for that run, task artifacts are cleaned, and the harness prints a `--resume` command to retry only those tasks.
+- Added early-stop protection when quota exhaustion repeats: after 5 consecutive `quota_exhausted` outcomes, eval stops and preserves resumable state instead of burning more requests.
+- Summary/submission/report outputs now include richer counters (`auth_affected_tasks`, `infra_affected_tasks`, `total_infra_retries`, plus quota counters) and report-level failure-class breakdown tables.
+- Added behavior telemetry from agent logs (self-test command count, toolchain install attempts, out-of-workspace read attempts) with confidence flags so analysis can distinguish strict parsing from fallback heuristics.
+
+The practical outcome is cleaner benchmarking: weighted scores reflect task-solving ability, while external instability is tracked separately and recoverably.
 
 ## Compatibility and comparing old runs
 
@@ -116,10 +150,20 @@ This document covers:
 - baseline: `v1.6.1`
 - through: current `HEAD` on `main`
 
-Main commits in range:
+Notable commits in range (chronological):
 - `a3a2758`
 - `c69c19e`
 - `5e972ea`
 - `f192caf`
 - `3567905`
 - `ba25c9a`
+- `a17ac5c`
+- `9c0e0b4`
+- `2e63c8a`
+- `0dab2c5`
+- `6a67453`
+- `7e2d943`
+- `6e6993f`
+- `8b8f55d`
+- `6f61a69`
+- `d027b85`
