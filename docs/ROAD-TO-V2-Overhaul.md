@@ -134,6 +134,13 @@ Recent `1.8.x` work focused on separating model failures from provider/auth/infr
 
 The practical outcome is cleaner benchmarking: weighted scores reflect task-solving ability, while external instability is tracked separately and recoverably.
 
+## What changed in v1.8.2 — prompt integration and workspace cleanup
+
+Two focused improvements to eval ergonomics:
+
+- **MCP tool guidance integrated into task prompt sections.** Instead of appending a separate `MCP TOOLS:` block, MCP guidance is now woven into the existing `ENVIRONMENT`, `YOUR TASK`, `IMPORTANT`, and `RULES` sections when `--use-mcp-tools` is enabled. This produces a more natural prompt structure and makes MCP tool usage a first-class instruction rather than an afterthought. Agent-specific `mcp_prompt` text is no longer appended separately.
+- **Workspace cleanup preserves eval artifacts.** Previously, `--keep-workspaces=false` (the default) removed the entire workspace directory after validation, which also deleted `agent.log`, `validation.log`, and integrity artifacts since the workspace dir doubles as the task output dir. Cleanup now selectively removes only source files while preserving harness-produced outputs (`agent.log`, `validation.log`, `integrity.json`, `integrity-files/`, `integrity-diff/`).
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:
@@ -167,3 +174,5 @@ Notable commits in range (chronological):
 - `8b8f55d`
 - `6f61a69`
 - `d027b85`
+- `1b26446`
+- `14efc13`
