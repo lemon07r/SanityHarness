@@ -115,6 +115,45 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	}
 }
 
+func TestBuildAgentPromptWithSkills(t *testing.T) {
+	t.Parallel()
+
+	tt := &task.Task{
+		Slug:        "demo",
+		Name:        "Demo Task",
+		Language:    task.Go,
+		Tier:        "core",
+		Difficulty:  "hard",
+		Description: "Implement the thing.",
+		Files: task.TaskFiles{
+			Stub: []string{"demo.go.txt"},
+			Test: []string{"demo_test.go.txt"},
+		},
+	}
+
+	promptWithoutSkills := buildAgentPrompt(tt, false, false, "")
+	for _, forbidden := range []string{
+		"- You have access to Agent Skills. Check your available skills and read their documentation before starting work.",
+		"- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective.",
+		"- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code.",
+	} {
+		if strings.Contains(promptWithoutSkills, forbidden) {
+			t.Fatalf("prompt without skills should not contain %q\n\nPrompt:\n%s", forbidden, promptWithoutSkills)
+		}
+	}
+
+	promptWithSkills := buildAgentPrompt(tt, false, true, "")
+	for _, s := range []string{
+		"- You have access to Agent Skills. Check your available skills and read their documentation before starting work.",
+		"- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective.",
+		"- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code.",
+	} {
+		if !strings.Contains(promptWithSkills, s) {
+			t.Fatalf("prompt with skills missing %q\n\nPrompt:\n%s", s, promptWithSkills)
+		}
+	}
+}
+
 func TestBuildAgentPromptIncludesToolchainInfo(t *testing.T) {
 	t.Parallel()
 
@@ -1486,6 +1525,7 @@ func TestParseAgentBehaviorMetrics(t *testing.T) {
 		"$ go test ./...",
 		"$ cargo test",
 		"$ curl -sL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar xJ",
+		"$ cat .agents/skills/firecrawl/SKILL.md",
 		"$ ls -la " + workspaceDir,
 		"$ find / -name zig -type f 2>/dev/null | head -5",
 		"/home/user/project/eval-results/old-run",
@@ -1503,6 +1543,12 @@ func TestParseAgentBehaviorMetrics(t *testing.T) {
 	}
 	if metrics.OutOfWorkspaceReads != 1 {
 		t.Fatalf("out-of-workspace reads = %d, want 1", metrics.OutOfWorkspaceReads)
+	}
+	if !metrics.SkillsUsed {
+		t.Fatal("skills_used = false, want true")
+	}
+	if metrics.SkillsUsageSignals != 1 {
+		t.Fatalf("skills_usage_signals = %d, want 1", metrics.SkillsUsageSignals)
 	}
 	if !metrics.SelfTestCommandsConfident {
 		t.Fatal("self-test confidence = false, want true")
@@ -1531,5 +1577,36 @@ func TestParseAgentBehaviorMetricsFallbackConfidence(t *testing.T) {
 	}
 	if metrics.OutOfWorkspaceReadsConfident {
 		t.Fatal("out-of-workspace confidence = true, want false for fallback parsing")
+	}
+	if metrics.SkillsUsed {
+		t.Fatal("skills_used = true, want false")
+	}
+	if metrics.SkillsUsageSignals != 0 {
+		t.Fatalf("skills_usage_signals = %d, want 0", metrics.SkillsUsageSignals)
+	}
+}
+
+func TestParseAgentBehaviorMetricsSkillSignalsFromStructuredLines(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "agent.log")
+	content := strings.Join([]string{
+		"→ Read /home/user/.agents/skills/firecrawl/SKILL.md",
+		"→ Read /home/user/.codex/skills/.system/skill-installer/SKILL.md",
+		"Read SKILL.md",
+		"→ Skill \"firecrawl\"",
+		"$ firecrawl search \"SanityHarness GitHub\" --limit 1 --json",
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	metrics := parseAgentBehaviorMetrics(logPath, filepath.Join(tmpDir, "workspace"))
+	if !metrics.SkillsUsed {
+		t.Fatal("skills_used = false, want true")
+	}
+	if metrics.SkillsUsageSignals < 4 {
+		t.Fatalf("skills_usage_signals = %d, want >= 4", metrics.SkillsUsageSignals)
 	}
 }

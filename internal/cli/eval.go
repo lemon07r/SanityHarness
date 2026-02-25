@@ -199,9 +199,16 @@ var outOfWorkspaceReadPatterns = []*regexp.Regexp{
 }
 
 var (
-	ansiEscapePattern   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	bashLCPattern       = regexp.MustCompile(`(?i)/usr/bin/bash -lc ['"](.+?)['"]`)
-	absolutePathPattern = regexp.MustCompile(`(^|[\s"'` + "`" + `])(/[^"'` + "`" + `\s;&|]*)`)
+	ansiEscapePattern       = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	bashLCPattern           = regexp.MustCompile(`(?i)/usr/bin/bash -lc ['"](.+?)['"]`)
+	absolutePathPattern     = regexp.MustCompile(`(^|[\s"'` + "`" + `])(/[^"'` + "`" + `\s;&|]*)`)
+	skillActivationPattern  = regexp.MustCompile(`(?i)\bskill\s+"([^"]+)"`)
+	firecrawlCommandPattern = regexp.MustCompile(`(?i)(?:^|\s)firecrawl\s+(search|scrape|crawl|map|agent|browser|download)\b`)
+	skillArtifactPattern    = regexp.MustCompile(
+		`(?i)[^"'` + "`" + `\s]*\.agents/skills/[^"'` + "`" + `\s]*|` +
+			`[^"'` + "`" + `\s]*\.codex/skills/[^"'` + "`" + `\s]*|` +
+			`[^"'` + "`" + `\s]*skill\.md`,
+	)
 )
 
 type agentBehaviorMetrics struct {
@@ -210,6 +217,8 @@ type agentBehaviorMetrics struct {
 	ToolchainInstallAttempts     int
 	OutOfWorkspaceReads          int
 	OutOfWorkspaceReadsConfident bool
+	SkillsUsed                   bool
+	SkillsUsageSignals           int
 }
 
 // FailureClass categorizes the root cause of non-successful or degraded runs.
@@ -253,6 +262,8 @@ type EvalResult struct {
 	ToolchainInstallAttempts     int               `json:"toolchain_install_attempts"`
 	OutOfWorkspaceReadAttempts   int               `json:"out_of_workspace_read_attempts"`
 	OutOfWorkspaceReadsConfident bool              `json:"out_of_workspace_read_attempts_confident"`
+	SkillsUsed                   bool              `json:"skills_used"`
+	SkillsUsageSignals           int               `json:"skills_usage_signals"`
 	WorkspaceDir                 string            `json:"-"` // Not serialized, used for cleanup
 }
 
@@ -306,9 +317,12 @@ type EvalSummary struct {
 	TotalSelfTestCommands           int                      `json:"total_self_test_commands"`
 	TotalToolchainInstallAttempts   int                      `json:"total_toolchain_install_attempts"`
 	TotalOutOfWorkspaceReadAttempts int                      `json:"total_out_of_workspace_read_attempts"`
+	SkillsUsageRate                 float64                  `json:"skills_usage_rate"`
+	TotalSkillsUsageSignals         int                      `json:"total_skills_usage_signals"`
 	TasksWithSelfTesting            int                      `json:"tasks_with_self_testing"`
 	TasksWithToolchainInstall       int                      `json:"tasks_with_toolchain_install"`
 	TasksWithOutOfWorkspaceReads    int                      `json:"tasks_with_out_of_workspace_reads"`
+	TasksWithSkillsUsage            int                      `json:"tasks_with_skills_usage"`
 }
 
 // RunSpec defines a single eval run's configuration.
@@ -410,7 +424,7 @@ Examples:
 		shared := SharedConfig{
 			Tier: evalTier, Difficulty: evalDifficulty, Lang: evalLang,
 			Tasks: evalTasks, Timeout: evalTimeout, Parallel: evalParallel,
- 		KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
+			KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
 			UseSkills: evalUseSkills, DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
 			Legacy: evalLegacy, DryRun: evalDryRun,
 		}
@@ -443,7 +457,7 @@ Examples:
 			shared = SharedConfig{
 				Tier: evalTier, Difficulty: evalDifficulty, Lang: evalLang,
 				Tasks: evalTasks, Timeout: evalTimeout, Parallel: evalParallel,
- 			KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
+				KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
 				UseSkills: evalUseSkills, DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
 				Legacy: evalLegacy, DryRun: evalDryRun,
 			}
@@ -1167,9 +1181,11 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	var totalInfraRetries int
 	var totalToolchainInstallAttempts int
 	var totalOutOfWorkspaceReadAttempts int
+	var totalSkillsUsageSignals int
 	var tasksWithSelfTesting int
 	var tasksWithToolchainInstall int
 	var tasksWithOutOfWorkspaceReads int
+	var tasksWithSkillsUsage int
 
 	addAgg := func(m map[string]EvalAggregate, key string, r EvalResult) {
 		agg := m[key]
@@ -1196,6 +1212,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		totalSelfTestCommands += r.SelfTestCommands
 		totalToolchainInstallAttempts += r.ToolchainInstallAttempts
 		totalOutOfWorkspaceReadAttempts += r.OutOfWorkspaceReadAttempts
+		totalSkillsUsageSignals += r.SkillsUsageSignals
 		if r.SelfTestCommands > 0 {
 			tasksWithSelfTesting++
 		}
@@ -1204,6 +1221,9 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		}
 		if r.OutOfWorkspaceReadAttempts > 0 {
 			tasksWithOutOfWorkspaceReads++
+		}
+		if r.SkillsUsed {
+			tasksWithSkillsUsage++
 		}
 
 		// Count by status
@@ -1230,6 +1250,10 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	weightedPassRate := 0.0
 	if maxPossibleScore > 0 {
 		weightedPassRate = totalWeightedScore / maxPossibleScore * 100
+	}
+	skillsUsageRate := 0.0
+	if total > 0 {
+		skillsUsageRate = float64(tasksWithSkillsUsage) / float64(total) * 100
 	}
 
 	finalize := func(m map[string]EvalAggregate) map[string]EvalAggregate {
@@ -1296,9 +1320,12 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		TotalSelfTestCommands:           totalSelfTestCommands,
 		TotalToolchainInstallAttempts:   totalToolchainInstallAttempts,
 		TotalOutOfWorkspaceReadAttempts: totalOutOfWorkspaceReadAttempts,
+		SkillsUsageRate:                 skillsUsageRate,
+		TotalSkillsUsageSignals:         totalSkillsUsageSignals,
 		TasksWithSelfTesting:            tasksWithSelfTesting,
 		TasksWithToolchainInstall:       tasksWithToolchainInstall,
 		TasksWithOutOfWorkspaceReads:    tasksWithOutOfWorkspaceReads,
+		TasksWithSkillsUsage:            tasksWithSkillsUsage,
 	}
 
 	summaryPath := filepath.Join(outputDir, "summary.json")
@@ -1571,6 +1598,8 @@ func applyAgentExecutionResult(result *EvalResult, agentResult agentExecutionRes
 	result.ToolchainInstallAttempts = metrics.ToolchainInstallAttempts
 	result.OutOfWorkspaceReadAttempts = metrics.OutOfWorkspaceReads
 	result.OutOfWorkspaceReadsConfident = metrics.OutOfWorkspaceReadsConfident
+	result.SkillsUsed = metrics.SkillsUsed
+	result.SkillsUsageSignals = metrics.SkillsUsageSignals
 }
 
 func shouldSkipValidationForExternalFailure(result *EvalResult) bool {
@@ -2139,8 +2168,8 @@ func buildAgentPrompt(t *task.Task, useMCPTools, useSkills bool, mcpPrompt strin
 	}
 	if useSkills {
 		skillsEnvironmentLine = "\n- You have access to Agent Skills. Check your available skills and read their documentation before starting work."
-		skillsImportantLine = "\n- Prefer your Agent Skills over manual alternatives if both can accomplish the same step or objective."
-		skillsRuleLine = "\n- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Review your available skills before writing any code."
+		skillsImportantLine = "\n- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective."
+		skillsRuleLine = "\n- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code."
 	}
 
 	prompt := fmt.Sprintf(`You are solving a coding task called "%s".
@@ -3148,24 +3177,27 @@ type LeaderboardSubmission struct {
 	ResultsHash    string `json:"results_hash"`
 
 	// Configuration
-	Timeout                         int  `json:"timeout"`
-	Parallel                        int  `json:"parallel"`
-	UseMCPTools                     bool `json:"use_mcp_tools"`
-	UseSkills                       bool `json:"use_skills"`
-	DisableMCP                      bool `json:"disable_mcp"`
-	Sandbox                         bool `json:"sandbox"`
-	Legacy                          bool `json:"legacy"`
-	QuotaAffectedTasks              int  `json:"quota_affected_tasks"`
-	AuthAffectedTasks               int  `json:"auth_affected_tasks"`
-	InfraAffectedTasks              int  `json:"infra_affected_tasks"`
-	TotalQuotaRetries               int  `json:"total_quota_retries"`
-	TotalInfraRetries               int  `json:"total_infra_retries"`
-	TotalSelfTestCommands           int  `json:"total_self_test_commands"`
-	TotalToolchainInstallAttempts   int  `json:"total_toolchain_install_attempts"`
-	TotalOutOfWorkspaceReadAttempts int  `json:"total_out_of_workspace_read_attempts"`
-	TasksWithSelfTesting            int  `json:"tasks_with_self_testing"`
-	TasksWithToolchainInstall       int  `json:"tasks_with_toolchain_install"`
-	TasksWithOutOfWorkspaceReads    int  `json:"tasks_with_out_of_workspace_reads"`
+	Timeout                         int     `json:"timeout"`
+	Parallel                        int     `json:"parallel"`
+	UseMCPTools                     bool    `json:"use_mcp_tools"`
+	UseSkills                       bool    `json:"use_skills"`
+	DisableMCP                      bool    `json:"disable_mcp"`
+	Sandbox                         bool    `json:"sandbox"`
+	Legacy                          bool    `json:"legacy"`
+	QuotaAffectedTasks              int     `json:"quota_affected_tasks"`
+	AuthAffectedTasks               int     `json:"auth_affected_tasks"`
+	InfraAffectedTasks              int     `json:"infra_affected_tasks"`
+	TotalQuotaRetries               int     `json:"total_quota_retries"`
+	TotalInfraRetries               int     `json:"total_infra_retries"`
+	TotalSelfTestCommands           int     `json:"total_self_test_commands"`
+	TotalToolchainInstallAttempts   int     `json:"total_toolchain_install_attempts"`
+	TotalOutOfWorkspaceReadAttempts int     `json:"total_out_of_workspace_read_attempts"`
+	SkillsUsageRate                 float64 `json:"skills_usage_rate"`
+	TotalSkillsUsageSignals         int     `json:"total_skills_usage_signals"`
+	TasksWithSelfTesting            int     `json:"tasks_with_self_testing"`
+	TasksWithToolchainInstall       int     `json:"tasks_with_toolchain_install"`
+	TasksWithOutOfWorkspaceReads    int     `json:"tasks_with_out_of_workspace_reads"`
+	TasksWithSkillsUsage            int     `json:"tasks_with_skills_usage"`
 }
 
 // LeaderboardLanguageStats contains per-language metrics for the leaderboard.
@@ -3208,9 +3240,12 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		TotalSelfTestCommands:           summary.TotalSelfTestCommands,
 		TotalToolchainInstallAttempts:   summary.TotalToolchainInstallAttempts,
 		TotalOutOfWorkspaceReadAttempts: summary.TotalOutOfWorkspaceReadAttempts,
+		SkillsUsageRate:                 summary.SkillsUsageRate,
+		TotalSkillsUsageSignals:         summary.TotalSkillsUsageSignals,
 		TasksWithSelfTesting:            summary.TasksWithSelfTesting,
 		TasksWithToolchainInstall:       summary.TasksWithToolchainInstall,
 		TasksWithOutOfWorkspaceReads:    summary.TasksWithOutOfWorkspaceReads,
+		TasksWithSkillsUsage:            summary.TasksWithSkillsUsage,
 		ByLanguage:                      make(map[string]LeaderboardLanguageStats),
 	}
 
@@ -3270,6 +3305,7 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	}
 	if summary.UseSkills {
 		sb.WriteString("| Skills Mode | Yes |\n")
+		fmt.Fprintf(sb, "| Skills Usage Rate | %.1f%% (%d/%d) |\n", summary.SkillsUsageRate, summary.TasksWithSkillsUsage, summary.Total)
 	}
 	if summary.DisableMCP {
 		sb.WriteString("| MCP Disabled | Yes |\n")
@@ -3326,10 +3362,12 @@ func writeReportBehaviorTelemetry(sb *strings.Builder, summary EvalSummary) {
 	fmt.Fprintf(sb, "- **Tasks with toolchain install attempts**: %d/%d\n", summary.TasksWithToolchainInstall, summary.Total)
 	fmt.Fprintf(sb, "- **Total out-of-workspace read attempts**: %d\n", summary.TotalOutOfWorkspaceReadAttempts)
 	fmt.Fprintf(sb, "- **Tasks with out-of-workspace read attempts**: %d/%d\n", summary.TasksWithOutOfWorkspaceReads, summary.Total)
+	fmt.Fprintf(sb, "- **Total Agent Skills usage signals**: %d\n", summary.TotalSkillsUsageSignals)
+	fmt.Fprintf(sb, "- **Tasks with Agent Skills usage**: %d/%d (%.1f%%)\n", summary.TasksWithSkillsUsage, summary.Total, summary.SkillsUsageRate)
 
 	hasTaskRows := false
 	for _, r := range summary.Results {
-		if r.SelfTestCommands > 0 || r.ToolchainInstallAttempts > 0 || r.OutOfWorkspaceReadAttempts > 0 {
+		if r.SelfTestCommands > 0 || r.ToolchainInstallAttempts > 0 || r.OutOfWorkspaceReadAttempts > 0 || r.SkillsUsed {
 			hasTaskRows = true
 			break
 		}
@@ -3339,21 +3377,23 @@ func writeReportBehaviorTelemetry(sb *strings.Builder, summary EvalSummary) {
 		return
 	}
 
-	sb.WriteString("\n| Task | Self Tests | Self Test Conf. | Tool Installs | Out-of-Workspace Reads | Out-of-Workspace Conf. |\n")
-	sb.WriteString("|------|------------|-----------------|---------------|-------------------------|------------------------|\n")
+	sb.WriteString("\n| Task | Self Tests | Self Test Conf. | Tool Installs | Out-of-Workspace Reads | Out-of-Workspace Conf. | Skills Used | Skill Signals |\n")
+	sb.WriteString("|------|------------|-----------------|---------------|-------------------------|------------------------|-------------|---------------|\n")
 	for _, r := range summary.Results {
-		if r.SelfTestCommands == 0 && r.ToolchainInstallAttempts == 0 && r.OutOfWorkspaceReadAttempts == 0 {
+		if r.SelfTestCommands == 0 && r.ToolchainInstallAttempts == 0 && r.OutOfWorkspaceReadAttempts == 0 && !r.SkillsUsed {
 			continue
 		}
 		fmt.Fprintf(
 			sb,
-			"| %s | %d | %t | %d | %d | %t |\n",
+			"| %s | %d | %t | %d | %d | %t | %t | %d |\n",
 			r.Task,
 			r.SelfTestCommands,
 			r.SelfTestCommandsConfident,
 			r.ToolchainInstallAttempts,
 			r.OutOfWorkspaceReadAttempts,
 			r.OutOfWorkspaceReadsConfident,
+			r.SkillsUsed,
+			r.SkillsUsageSignals,
 		)
 	}
 	sb.WriteString("\n")
@@ -3459,6 +3499,7 @@ func parseAgentBehaviorMetrics(logPath, workspaceDir string) agentBehaviorMetric
 	selfTests, selfConfident := countCommandMatches(commands, selfTestCommandPatterns)
 	toolchainInstalls, toolchainConfident := countCommandMatches(commands, toolchainInstallPatterns)
 	outReads, outReadsConfident := countOutOfWorkspaceReads(commands, workspaceDir)
+	skillsSignals := countSkillUsageSignals(lines, commands)
 
 	// Fallback to broad line matching when command extraction fails.
 	if !selfConfident {
@@ -3483,7 +3524,84 @@ func parseAgentBehaviorMetrics(logPath, workspaceDir string) agentBehaviorMetric
 		ToolchainInstallAttempts:     toolchainInstalls,
 		OutOfWorkspaceReads:          outReads,
 		OutOfWorkspaceReadsConfident: outReadsConfident,
+		SkillsUsed:                   skillsSignals > 0,
+		SkillsUsageSignals:           skillsSignals,
 	}
+}
+
+func countSkillUsageSignals(lines, commands []string) int {
+	seen := make(map[string]struct{})
+
+	record := func(text string) {
+		for _, ref := range extractSkillArtifactRefs(text) {
+			key := "artifact:" + strings.ToLower(ref)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+
+		for _, match := range skillActivationPattern.FindAllStringSubmatch(text, -1) {
+			if len(match) < 2 {
+				continue
+			}
+			skillName := strings.TrimSpace(match[1])
+			if skillName == "" {
+				continue
+			}
+			key := "activation:" + strings.ToLower(skillName)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+
+		if firecrawlCommandPattern.MatchString(text) {
+			cmd := strings.ToLower(strings.TrimSpace(text))
+			key := "firecrawl:" + cmd
+			if _, exists := seen[key]; !exists {
+				seen[key] = struct{}{}
+			}
+		}
+	}
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(ansiEscapePattern.ReplaceAllString(rawLine, ""))
+		if line == "" {
+			continue
+		}
+		record(line)
+	}
+	for _, cmd := range commands {
+		record(cmd)
+	}
+
+	return len(seen)
+}
+
+func extractSkillArtifactRefs(text string) []string {
+	matches := skillArtifactPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	refs := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		ref := strings.TrimSpace(match)
+		ref = strings.Trim(ref, "\"'`")
+		ref = strings.TrimRight(ref, ",.:;)")
+		if ref == "" {
+			continue
+		}
+		key := strings.ToLower(ref)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 func extractCommandLines(lines []string) []string {

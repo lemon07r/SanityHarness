@@ -41,9 +41,12 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 		TotalSelfTestCommands:           17,
 		TotalToolchainInstallAttempts:   2,
 		TotalOutOfWorkspaceReadAttempts: 3,
+		SkillsUsageRate:                 38.5,
+		TotalSkillsUsageSignals:         5,
 		TasksWithSelfTesting:            9,
 		TasksWithToolchainInstall:       1,
 		TasksWithOutOfWorkspaceReads:    2,
+		TasksWithSkillsUsage:            10,
 		ByLanguage: map[string]EvalAggregate{
 			"go": {Passed: 3, Failed: 3, Total: 6, PassRate: 50.0},
 		},
@@ -81,6 +84,12 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 	if submission.TotalOutOfWorkspaceReadAttempts != 3 {
 		t.Fatalf("total_out_of_workspace_read_attempts = %d, want 3", submission.TotalOutOfWorkspaceReadAttempts)
 	}
+	if submission.SkillsUsageRate != 38.5 {
+		t.Fatalf("skills_usage_rate = %v, want 38.5", submission.SkillsUsageRate)
+	}
+	if submission.TotalSkillsUsageSignals != 5 {
+		t.Fatalf("total_skills_usage_signals = %d, want 5", submission.TotalSkillsUsageSignals)
+	}
 	if submission.TasksWithSelfTesting != 9 {
 		t.Fatalf("tasks_with_self_testing = %d, want 9", submission.TasksWithSelfTesting)
 	}
@@ -89,6 +98,9 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 	}
 	if submission.TasksWithOutOfWorkspaceReads != 2 {
 		t.Fatalf("tasks_with_out_of_workspace_reads = %d, want 2", submission.TasksWithOutOfWorkspaceReads)
+	}
+	if submission.TasksWithSkillsUsage != 10 {
+		t.Fatalf("tasks_with_skills_usage = %d, want 10", submission.TasksWithSkillsUsage)
 	}
 }
 
@@ -152,9 +164,12 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		TotalSelfTestCommands:           0,
 		TotalToolchainInstallAttempts:   0,
 		TotalOutOfWorkspaceReadAttempts: 0,
+		SkillsUsageRate:                 0,
+		TotalSkillsUsageSignals:         0,
 		TasksWithSelfTesting:            0,
 		TasksWithToolchainInstall:       0,
 		TasksWithOutOfWorkspaceReads:    0,
+		TasksWithSkillsUsage:            0,
 	}
 
 	data, err := json.Marshal(summary)
@@ -178,9 +193,12 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		`"total_self_test_commands":0`,
 		`"total_toolchain_install_attempts":0`,
 		`"total_out_of_workspace_read_attempts":0`,
+		`"skills_usage_rate":0`,
+		`"total_skills_usage_signals":0`,
 		`"tasks_with_self_testing":0`,
 		`"tasks_with_toolchain_install":0`,
 		`"tasks_with_out_of_workspace_reads":0`,
+		`"tasks_with_skills_usage":0`,
 	} {
 		if !strings.Contains(got, field) {
 			t.Fatalf("expected summary json to include %s, got: %s", field, got)

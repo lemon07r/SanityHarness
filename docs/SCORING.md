@@ -158,6 +158,7 @@ eval-results/<timestamp>-<agent>/
   "model": "gemini-3-flash-preview",
   "reasoning": "high",
   "use_mcp_tools": false,
+  "use_skills": true,
   "disable_mcp": false,
   "timestamp": "2026-01-07T052902",
   "harness_version": "abc123",
@@ -174,6 +175,9 @@ eval-results/<timestamp>-<agent>/
   "weighted_pass_rate": 45.5,
   "weighted_score": 15.12,
   "max_possible_score": 33.29,
+  "skills_usage_rate": 38.5,
+  "total_skills_usage_signals": 5,
+  "tasks_with_skills_usage": 10,
   
   "by_language": {
     "go": { "passed": 3, "failed": 3, "total": 6, "pass_rate": 50.0 }
@@ -194,16 +198,21 @@ eval-results/<timestamp>-<agent>/
       "weight": 1.0,
       "score": 1.0,
       "duration_ms": 45000,
-      "attempts": 1
+      "attempts": 1,
+      "skills_used": true,
+      "skills_usage_signals": 1
     }
   ]
 }
 ```
 
 Notes:
-- `timeout`, `parallel`, `use_mcp_tools`, `disable_mcp`, `sandbox`, `legacy`,
+- `timeout`, `parallel`, `use_mcp_tools`, `use_skills`, `disable_mcp`, `sandbox`, `legacy`,
   `quota_affected_tasks`, and `total_quota_retries` are always emitted.
 - Per-task `results[]` include explicit retry/infra metadata fields.
+- Skills telemetry fields are emitted at both run and per-task levels:
+  `skills_usage_rate`, `total_skills_usage_signals`, `tasks_with_skills_usage`,
+  `skills_used`, and `skills_usage_signals`.
 
 ### attestation.json Schema
 
@@ -243,6 +252,7 @@ Optimized for leaderboard submissions:
   "model": "gemini-3-flash-preview",
   "reasoning": "high",
   "use_mcp_tools": false,
+  "use_skills": true,
   "disable_mcp": false,
   "timestamp": "2026-01-07T052902",
   
@@ -256,6 +266,9 @@ Optimized for leaderboard submissions:
   "max_possible_score": 33.29,
   
   "integrity_violations": 0,
+  "skills_usage_rate": 38.5,
+  "total_skills_usage_signals": 5,
+  "tasks_with_skills_usage": 10,
   
   "by_language": {
     "go": { "passed": 3, "failed": 3, "total": 6, "pass_rate": 50.0 }
@@ -271,7 +284,7 @@ Optimized for leaderboard submissions:
 Notes:
 - `submission.json` includes run metadata and audit counters:
   `timeout`, `parallel`, `quota_affected_tasks`, and `total_quota_retries`.
-- Configuration booleans (`use_mcp_tools`, `disable_mcp`, `sandbox`, `legacy`)
+- Configuration booleans (`use_mcp_tools`, `use_skills`, `disable_mcp`, `sandbox`, `legacy`)
   are always emitted as explicit booleans.
 
 ### report.md Format

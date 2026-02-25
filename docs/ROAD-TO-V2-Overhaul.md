@@ -141,6 +141,20 @@ Two focused improvements to eval ergonomics:
 - **MCP tool guidance integrated into task prompt sections.** Instead of appending a separate `MCP TOOLS:` block, MCP guidance is now woven into the existing `ENVIRONMENT`, `YOUR TASK`, `IMPORTANT`, and `RULES` sections when `--use-mcp-tools` is enabled. This produces a more natural prompt structure and makes MCP tool usage a first-class instruction rather than an afterthought. Agent-specific `mcp_prompt` text is no longer appended separately.
 - **Workspace cleanup preserves eval artifacts.** Previously, `--keep-workspaces=false` (the default) removed the entire workspace directory after validation, which also deleted `agent.log`, `validation.log`, and integrity artifacts since the workspace dir doubles as the task output dir. Cleanup now selectively removes only source files while preserving harness-produced outputs (`agent.log`, `validation.log`, `integrity.json`, `integrity-files/`, `integrity-diff/`).
 
+## What changed in v1.8.4 — Agent Skills prompting and telemetry
+
+This release focuses on making `--use-skills` behavior measurable and auditable.
+
+- **Stronger skills prompt contract.** The eval prompt now explicitly instructs agents to load at least one relevant skill (when available) and make the first skill call before writing code.
+- **Per-task skills telemetry.** `results[]` now records `skills_used` and `skills_usage_signals` so skill adoption can be analyzed per task.
+- **Run-level skills metrics.** `summary.json`, `submission.json`, and `report.md` now include:
+  - `skills_usage_rate`
+  - `total_skills_usage_signals`
+  - `tasks_with_skills_usage`
+- **OpenCode-compatible skill signal detection.** Telemetry parsing now detects common OpenCode skill markers like `Skill "..."` activations and explicit `firecrawl ...` command usage, in addition to file-path based skill artifact signals.
+
+Practical impact: A/B runs with and without `--use-skills` can now show an observable usage delta instead of only a mode toggle.
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:
