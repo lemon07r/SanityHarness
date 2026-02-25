@@ -31,7 +31,7 @@ func TestBuildAgentPromptIncludesKeyInfo(t *testing.T) {
 		},
 	}
 
-	prompt := buildAgentPrompt(tt, false, "")
+	prompt := buildAgentPrompt(tt, false, false, "")
 
 	for _, s := range []string{
 		"Description: " + tt.Description,
@@ -76,7 +76,7 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	}
 
 	// Test without MCP tools
-	promptWithoutMCP := buildAgentPrompt(tt, false, "")
+	promptWithoutMCP := buildAgentPrompt(tt, false, false, "")
 	for _, forbidden := range []string{
 		"You have access to MCP server tools. Review what is available to you before starting work.",
 		"1. Use your MCP server tools to help complete your task(s) wherever and whenever applicable.",
@@ -91,7 +91,7 @@ func TestBuildAgentPromptWithMCPTools(t *testing.T) {
 	}
 
 	// Test with MCP tools
-	promptWithMCP := buildAgentPrompt(tt, true, "agent-specific text should not appear")
+	promptWithMCP := buildAgentPrompt(tt, true, false, "agent-specific text should not appear")
 	for _, s := range []string{
 		"- You have access to MCP server tools. Review what is available to you before starting work.",
 		"1. Use your MCP server tools to help complete your task(s) wherever and whenever applicable.",
@@ -157,7 +157,7 @@ func TestBuildAgentPromptIncludesToolchainInfo(t *testing.T) {
 				},
 			}
 
-			prompt := buildAgentPrompt(tt, false, "")
+			prompt := buildAgentPrompt(tt, false, false, "")
 			wantLine := "- Toolchain: " + tc.want
 			if !strings.Contains(prompt, wantLine) {
 				t.Fatalf("prompt missing %q\n\nPrompt:\n%s", wantLine, prompt)

@@ -28,6 +28,7 @@ type BatchDefaults struct {
 	Parallel       int    `toml:"parallel"`
 	KeepWorkspaces bool   `toml:"keep_workspaces"`
 	UseMCPTools    bool   `toml:"use_mcp_tools"`
+	UseSkills      bool   `toml:"use_skills"`
 	DisableMCP     bool   `toml:"disable_mcp"`
 	NoSandbox      bool   `toml:"no_sandbox"`
 	Legacy         bool   `toml:"legacy"`
@@ -89,6 +90,7 @@ The TOML file supports defaults that apply to all runs, with per-run overrides.`
 			Parallel:       defaults.Parallel,
 			KeepWorkspaces: defaults.KeepWorkspaces,
 			UseMCPTools:    defaults.UseMCPTools,
+			UseSkills:      defaults.UseSkills,
 			DisableMCP:     defaults.DisableMCP,
 			NoSandbox:      defaults.NoSandbox,
 			Legacy:         defaults.Legacy,

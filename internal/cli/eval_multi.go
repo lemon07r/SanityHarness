@@ -383,6 +383,7 @@ func restoreSharedConfigGlobals(shared SharedConfig) {
 	evalParallel = shared.Parallel
 	evalKeepWorkspaces = shared.KeepWorkspaces
 	evalUseMCPTools = shared.UseMCPTools
+	evalUseSkills = shared.UseSkills
 	evalDisableMCP = shared.DisableMCP
 	evalNoSandbox = shared.NoSandbox
 	evalLegacy = shared.Legacy

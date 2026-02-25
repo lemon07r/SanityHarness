@@ -243,6 +243,7 @@ var Default = Config{
 			".opencode/bin",
 			".bun/bin",
 			".npm-global",
+			".agents",
 		},
 	},
 }

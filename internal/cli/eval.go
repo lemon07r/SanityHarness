@@ -47,6 +47,7 @@ var (
 	evalParallel        int
 	evalDryRun          bool
 	evalUseMCPTools     bool
+	evalUseSkills       bool
 	evalDisableMCP      bool
 	evalNoSandbox       bool
 	evalLegacy          bool
@@ -293,6 +294,7 @@ type EvalSummary struct {
 	ByTier                          map[string]EvalAggregate `json:"by_tier,omitempty"`
 	ByDifficulty                    map[string]EvalAggregate `json:"by_difficulty,omitempty"`
 	UseMCPTools                     bool                     `json:"use_mcp_tools"`
+	UseSkills                       bool                     `json:"use_skills"`
 	DisableMCP                      bool                     `json:"disable_mcp"`
 	Sandbox                         bool                     `json:"sandbox"`
 	Legacy                          bool                     `json:"legacy"`
@@ -326,6 +328,7 @@ type SharedConfig struct {
 	Parallel       int
 	KeepWorkspaces bool
 	UseMCPTools    bool
+	UseSkills      bool
 	DisableMCP     bool
 	NoSandbox      bool
 	Legacy         bool
@@ -344,6 +347,7 @@ type RunConfig struct {
 	Timeout        int      `json:"timeout"`
 	Parallel       int      `json:"parallel"`
 	UseMCPTools    bool     `json:"use_mcp_tools"`
+	UseSkills      bool     `json:"use_skills"`
 	DisableMCP     bool     `json:"disable_mcp"`
 	NoSandbox      bool     `json:"no_sandbox"`
 	Legacy         bool     `json:"legacy"`
@@ -406,8 +410,8 @@ Examples:
 		shared := SharedConfig{
 			Tier: evalTier, Difficulty: evalDifficulty, Lang: evalLang,
 			Tasks: evalTasks, Timeout: evalTimeout, Parallel: evalParallel,
-			KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
-			DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
+ 		KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
+			UseSkills: evalUseSkills, DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
 			Legacy: evalLegacy, DryRun: evalDryRun,
 		}
 
@@ -439,8 +443,8 @@ Examples:
 			shared = SharedConfig{
 				Tier: evalTier, Difficulty: evalDifficulty, Lang: evalLang,
 				Tasks: evalTasks, Timeout: evalTimeout, Parallel: evalParallel,
-				KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
-				DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
+ 			KeepWorkspaces: evalKeepWorkspaces, UseMCPTools: evalUseMCPTools,
+				UseSkills: evalUseSkills, DisableMCP: evalDisableMCP, NoSandbox: evalNoSandbox,
 				Legacy: evalLegacy, DryRun: evalDryRun,
 			}
 
@@ -775,6 +779,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	evalModel = spec.Model
 	evalReasoning = spec.Reasoning
 	evalUseMCPTools = shared.UseMCPTools
+	evalUseSkills = shared.UseSkills
 	evalDisableMCP = shared.DisableMCP
 	evalLegacy = shared.Legacy
 	evalKeepWorkspaces = shared.KeepWorkspaces
@@ -1279,6 +1284,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		ByTier:                          finalize(byTier),
 		ByDifficulty:                    finalize(byDifficulty),
 		UseMCPTools:                     shared.UseMCPTools,
+		UseSkills:                       shared.UseSkills,
 		DisableMCP:                      shared.DisableMCP,
 		Sandbox:                         evalSandboxActive,
 		Legacy:                          shared.Legacy,
@@ -1408,7 +1414,7 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 	}
 
 	// Build agent command
-	prompt := buildAgentPrompt(t, evalUseMCPTools, agentCfg.MCPPrompt)
+	prompt := buildAgentPrompt(t, evalUseMCPTools, evalUseSkills, agentCfg.MCPPrompt)
 	result.PromptChars = utf8.RuneCountInString(prompt)
 	agentTimeout := resolveAgentTimeout(timeout, agentCfg.DefaultTimeout, t.AgentTimeout)
 
@@ -2095,7 +2101,7 @@ func toolchainInfo(lang task.Language) string {
 	}
 }
 
-func buildAgentPrompt(t *task.Task, useMCPTools bool, mcpPrompt string) string {
+func buildAgentPrompt(t *task.Task, useMCPTools, useSkills bool, mcpPrompt string) string {
 	stubFiles := make([]string, 0, len(t.Files.Stub))
 	for _, f := range t.Files.Stub {
 		stubFiles = append(stubFiles, task.StripTxtExtension(f))
@@ -2112,6 +2118,9 @@ func buildAgentPrompt(t *task.Task, useMCPTools bool, mcpPrompt string) string {
 	mcpEnvironmentLine := ""
 	mcpImportantLine := ""
 	mcpRuleLine := ""
+	skillsEnvironmentLine := ""
+	skillsImportantLine := ""
+	skillsRuleLine := ""
 	taskInstructions := `1. Read the stub file(s) (function signatures with panic()/todo!/Unimplemented placeholders).
 2. Read the visible test file(s) to understand expected behavior and edge cases.
 3. Implement the stub file(s), replacing placeholders with working code.
@@ -2127,6 +2136,11 @@ func buildAgentPrompt(t *task.Task, useMCPTools bool, mcpPrompt string) string {
 6. Ensure thread-safety if the tests use concurrent operations.`
 		mcpImportantLine = "\n- Prefer your MCP server tools over built-in alternatives if both can accomplish the same step or objective."
 		mcpRuleLine = "\n- You MUST actively use your MCP server tools to assist you with your work. Do NOT ignore them. Make your first MCP server tool call before writing any code."
+	}
+	if useSkills {
+		skillsEnvironmentLine = "\n- You have access to Agent Skills. Check your available skills and read their documentation before starting work."
+		skillsImportantLine = "\n- Prefer your Agent Skills over manual alternatives if both can accomplish the same step or objective."
+		skillsRuleLine = "\n- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Review your available skills before writing any code."
 	}
 
 	prompt := fmt.Sprintf(`You are solving a coding task called "%s".
@@ -2145,23 +2159,23 @@ ENVIRONMENT:
 - Final validation runs automatically in a Docker container.
 - Toolchain: %s
 - You may run local tests/commands in the workspace while iterating.
-- Toolchains are preinstalled; extra installs are optional.%s
+- Toolchains are preinstalled; extra installs are optional.%s%s
 
 YOUR TASK:
 %s
 
 IMPORTANT:
-- There may be hidden tests that check additional edge cases for the same public API.%s
+- There may be hidden tests that check additional edge cases for the same public API.%s%s
 
 RULES:
 - ONLY edit the stub/solution source file(s).
 - Do NOT modify test files or support files.
 - You may add new helper source files if needed.
 - Evaluation fails if you modify protected files.
-- Do NOT navigate to parent directories or read files outside the workspace.%s`,
+- Do NOT navigate to parent directories or read files outside the workspace.%s%s`,
 		t.Name, t.Language, t.Tier, t.Difficulty, t.Description,
 		strings.Join(stubFiles, ", "), strings.Join(testFiles, ", "),
-		toolchainInfo(t.Language), mcpEnvironmentLine, taskInstructions, mcpImportantLine, mcpRuleLine)
+		toolchainInfo(t.Language), mcpEnvironmentLine, skillsEnvironmentLine, taskInstructions, mcpImportantLine, skillsImportantLine, mcpRuleLine, skillsRuleLine)
 
 	return prompt
 }
@@ -3137,6 +3151,7 @@ type LeaderboardSubmission struct {
 	Timeout                         int  `json:"timeout"`
 	Parallel                        int  `json:"parallel"`
 	UseMCPTools                     bool `json:"use_mcp_tools"`
+	UseSkills                       bool `json:"use_skills"`
 	DisableMCP                      bool `json:"disable_mcp"`
 	Sandbox                         bool `json:"sandbox"`
 	Legacy                          bool `json:"legacy"`
@@ -3181,6 +3196,7 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		Timeout:                         summary.Timeout,
 		Parallel:                        summary.Parallel,
 		UseMCPTools:                     summary.UseMCPTools,
+		UseSkills:                       summary.UseSkills,
 		DisableMCP:                      summary.DisableMCP,
 		Sandbox:                         summary.Sandbox,
 		Legacy:                          summary.Legacy,
@@ -3251,6 +3267,9 @@ func writeReportSummary(sb *strings.Builder, summary EvalSummary) {
 	}
 	if summary.UseMCPTools {
 		sb.WriteString("| MCP Tools Mode | Yes |\n")
+	}
+	if summary.UseSkills {
+		sb.WriteString("| Skills Mode | Yes |\n")
 	}
 	if summary.DisableMCP {
 		sb.WriteString("| MCP Disabled | Yes |\n")
@@ -3814,6 +3833,7 @@ func saveRunConfig(outputDir string, allTasks []*task.Task) error {
 		Timeout:        evalTimeout,
 		Parallel:       evalParallel,
 		UseMCPTools:    evalUseMCPTools,
+		UseSkills:      evalUseSkills,
 		DisableMCP:     evalDisableMCP,
 		NoSandbox:      evalNoSandbox,
 		Legacy:         evalLegacy,
@@ -3857,6 +3877,7 @@ func applyRunConfig(runCfg *RunConfig) {
 	evalTimeout = runCfg.Timeout
 	evalParallel = runCfg.Parallel
 	evalUseMCPTools = runCfg.UseMCPTools
+	evalUseSkills = runCfg.UseSkills
 	evalDisableMCP = runCfg.DisableMCP
 	evalNoSandbox = runCfg.NoSandbox
 	evalLegacy = runCfg.Legacy
@@ -4113,6 +4134,7 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalKeepWorkspaces, "keep-workspaces", false, "keep workspace directories after evaluation")
 	evalCmd.Flags().BoolVar(&evalDryRun, "dry-run", false, "show what tasks would be run without executing")
 	evalCmd.Flags().BoolVar(&evalUseMCPTools, "use-mcp-tools", false, "inject MCP tool usage instructions into agent prompt")
+	evalCmd.Flags().BoolVar(&evalUseSkills, "use-skills", false, "inject Agent Skills usage instructions into agent prompt")
 	evalCmd.Flags().BoolVar(&evalDisableMCP, "disable-mcp", false, "disable MCP tools for agents that support it (currently: opencode)")
 	evalCmd.Flags().BoolVar(&evalNoSandbox, "no-sandbox", false, "disable bubblewrap sandbox for agent processes")
 	evalCmd.Flags().BoolVar(&evalLegacy, "legacy", false, "expose hidden tests to agent during workspace init (pre-v1.6.0 behavior)")

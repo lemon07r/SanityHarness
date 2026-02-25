@@ -120,6 +120,10 @@ pubspec.lock
 **/zig-out/
 **/.zig-cache/
 
+# Agent Skills artifacts
+skills/
+skills-lock.json
+
 # Pampax semantic search index
 .pampa/
 pampa.codemap.json
