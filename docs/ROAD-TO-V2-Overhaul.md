@@ -155,6 +155,17 @@ This release focuses on making `--use-skills` behavior measurable and auditable.
 
 Practical impact: A/B runs with and without `--use-skills` can now show an observable usage delta instead of only a mode toggle.
 
+## What changed in v1.8.5 — Agent Skills workspace integration and prompt rewrite
+
+This release makes `--use-skills` actually trigger skill usage by agents, rather than just injecting a prompt hint.
+
+- **Skills copied into task workspaces.** When `--use-skills` is enabled, the harness now copies skill directories from `~/.agents/skills/` into each task workspace under `.agents/skills/`. Previously, skills were only referenced in the prompt but not present in the workspace, so agents had no way to discover or read `SKILL.md` files.
+- **Agent-agnostic skills prompt.** The skills prompt was rewritten to be fully generic: it tells the agent that skills exist in `.agents/skills/`, to read the `SKILL.md` files, and to execute skill commands directly in the terminal. No specific skill names, capabilities, or workflows are mentioned — the `SKILL.md` content drives agent behavior. This replaces the previous `activate_skill` wording that referenced a tool only available in Codex.
+- **Toolchain search telemetry.** Agent behavior metrics now track `toolchain_search_attempts` and `tasks_with_toolchain_search` separately from `toolchain_install_attempts`, distinguishing agents that search for compilers (e.g., `find / -name dart`) from those that try to install them.
+- **Skills path whitelisting.** The sandbox and out-of-workspace penalty system now whitelists `.agents/skills/` paths so agents can read skill files without triggering penalties.
+
+Practical impact: Agents with `--use-skills` now actually discover and execute skill tools (e.g., `firecrawl search ...`) instead of ignoring them. Early testing shows ~27% of tasks triggering real skill commands, up from 0% in all previous runs.
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:
@@ -190,3 +201,7 @@ Notable commits in range (chronological):
 - `d027b85`
 - `1b26446`
 - `14efc13`
+- `f9c3a14`
+- `09f44ee`
+- `62f8538`
+- `097d088`
