@@ -133,7 +133,7 @@ func TestBuildAgentPromptWithSkills(t *testing.T) {
 
 	promptWithoutSkills := buildAgentPrompt(tt, false, false, "")
 	for _, forbidden := range []string{
-		"- You have access to Agent Skills. Use the 'activate_skill' tool to read their documentation and load their specialized workflows. Do NOT try to read the skill markdown files directly from the filesystem.",
+		"- You have access to Agent Skills located in the '.agents/skills/' directory. Read the 'SKILL.md' files within these directories to understand the available tools and their usage. Execute their commands directly in your terminal.",
 		"- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective.",
 		"- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code.",
 	} {
@@ -144,7 +144,7 @@ func TestBuildAgentPromptWithSkills(t *testing.T) {
 
 	promptWithSkills := buildAgentPrompt(tt, false, true, "")
 	for _, s := range []string{
-		"- You have access to Agent Skills. Use the 'activate_skill' tool to read their documentation and load their specialized workflows. Do NOT try to read the skill markdown files directly from the filesystem.",
+		"- You have access to Agent Skills located in the '.agents/skills/' directory. Read the 'SKILL.md' files within these directories to understand the available tools and their usage. Execute their commands directly in your terminal.",
 		"- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective.",
 		"- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code.",
 	} {
