@@ -1433,6 +1433,17 @@ func runTaskWithAgent(ctx context.Context, r *runner.Runner, t *task.Task, agent
 		return result
 	}
 
+	if evalUseSkills {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			agentSkillsSrc := filepath.Join(homeDir, ".agents", "skills")
+			if _, err := os.Stat(agentSkillsSrc); err == nil {
+				agentSkillsDest := filepath.Join(agentWorkDir, ".agents", "skills")
+				_ = os.MkdirAll(agentSkillsDest, 0755)
+				_ = copyDirContents(agentSkillsSrc, agentSkillsDest)
+			}
+		}
+	}
+
 	// Get agent configuration
 	agentCfg := cfg.GetAgent(agent)
 	if agentCfg == nil {
@@ -2167,7 +2178,7 @@ func buildAgentPrompt(t *task.Task, useMCPTools, useSkills bool, mcpPrompt strin
 		mcpRuleLine = "\n- You MUST actively use your MCP server tools to assist you with your work. Do NOT ignore them. Make your first MCP server tool call before writing any code."
 	}
 	if useSkills {
-		skillsEnvironmentLine = "\n- You have access to Agent Skills. Check your available skills and read their documentation before starting work."
+		skillsEnvironmentLine = "\n- You have access to Agent Skills. Use the 'activate_skill' tool to read their documentation and load their specialized workflows. Do NOT try to read the skill markdown files directly from the filesystem."
 		skillsImportantLine = "\n- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective."
 		skillsRuleLine = "\n- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code."
 	}
@@ -3705,6 +3716,17 @@ func commandReadsOutsideWorkspace(paths []string, workspaceAbs string) bool {
 		if p == workspaceAbs || strings.HasPrefix(p, workspaceAbs+string(os.PathSeparator)) {
 			continue
 		}
+
+		// Whitelist skill directories from being penalized as out-of-workspace
+		if strings.Contains(p, "/.agents/") || strings.Contains(p, "/.gemini/skills/") || strings.Contains(p, "/.opencode/skills/") || strings.Contains(p, "/.codex/skills/") || strings.Contains(p, "/.junie/skills/") || strings.Contains(p, "/.qwen/skills/") || strings.Contains(p, "/.kilocode/skills/") || strings.Contains(p, "/.factory/skills/") {
+			continue
+		}
+
+		// Whitelist standard system executable paths
+		if strings.HasPrefix(p, "/usr/bin/") || strings.HasPrefix(p, "/usr/local/bin/") || strings.HasPrefix(p, "/opt/") || strings.HasPrefix(p, "/usr/lib/") {
+			continue
+		}
+
 		return true
 	}
 	return false
