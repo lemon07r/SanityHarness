@@ -288,7 +288,7 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for architecture details.
 ## Version History
 
 For a full summary of all changes since `v1.6.1` (the entire `1.7.x` line and further), see [docs/ROAD-TO-V2-Overhaul.md](docs/ROAD-TO-V2-Overhaul.md).
-Current stable release: `v1.8.6`.
+Current stable release: `v1.8.7`.
 
 ## Contributing
 

@@ -110,7 +110,7 @@ tier = "core"                    # core | extended (default: core)
 difficulty = "hard"              # hard | expert
 description = "Implement a concurrent bank account with mutex synchronization"
 timeout = 30                     # Validation timeout in seconds (optional)
-agent_timeout = 120              # Agent timeout for eval (optional)
+agent_timeout = 120              # Agent timeout floor for eval (optional; cannot reduce a higher global timeout)
 
 [files]
 stub = ["bank_account.go.txt"]           # Files for agent to implement

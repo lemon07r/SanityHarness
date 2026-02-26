@@ -179,6 +179,19 @@ This release fixes a reporting blind spot for resumable external failures (`auth
 
 Practical impact: users can now distinguish "model failed task logic" from "task skipped due to external/provider failure" without needing missing workspace artifacts.
 
+## What changed in v1.8.7 — timeout floor consistency
+
+This release fixes a timeout precedence bug that caused some tasks to ignore higher global timeout settings.
+
+- **Task `agent_timeout` is now a floor, not a hard override.** Timeout resolution now takes the maximum of:
+  - global eval timeout (`--timeout` / harness default),
+  - agent default timeout,
+  - task-level `agent_timeout`.
+- **Regression tests added.** New eval timeout tests verify task-level timeouts cannot reduce higher global or agent defaults.
+- **Task schema docs clarified.** `agent_timeout` documentation now explicitly states it cannot reduce a higher global timeout.
+
+Practical impact: if you run with `--timeout 600`, tasks that specify `agent_timeout = 240` will now use `600` instead of being cut down to `240`.
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:

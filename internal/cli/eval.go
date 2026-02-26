@@ -1606,7 +1606,10 @@ func resolveAgentTimeout(timeoutSeconds, defaultSeconds, taskSeconds int) time.D
 		}
 	}
 	if taskSeconds > 0 {
-		timeout = time.Duration(taskSeconds) * time.Second
+		taskTimeout := time.Duration(taskSeconds) * time.Second
+		if timeout < taskTimeout {
+			timeout = taskTimeout
+		}
 	}
 	return timeout
 }

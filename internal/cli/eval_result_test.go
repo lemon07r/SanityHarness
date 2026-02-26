@@ -143,3 +143,62 @@ func TestShouldSkipValidationForExternalFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveAgentTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		globalSeconds  int
+		agentSeconds   int
+		taskSeconds    int
+		wantTimeoutSec int
+	}{
+		{
+			name:           "falls_back_to_600_seconds_when_unset",
+			wantTimeoutSec: 600,
+		},
+		{
+			name:           "uses_global_timeout_when_provided",
+			globalSeconds:  600,
+			wantTimeoutSec: 600,
+		},
+		{
+			name:           "agent_default_raises_timeout_floor",
+			globalSeconds:  120,
+			agentSeconds:   240,
+			wantTimeoutSec: 240,
+		},
+		{
+			name:           "task_timeout_raises_timeout_floor",
+			globalSeconds:  120,
+			taskSeconds:    300,
+			wantTimeoutSec: 300,
+		},
+		{
+			name:           "task_timeout_does_not_reduce_higher_global",
+			globalSeconds:  600,
+			taskSeconds:    240,
+			wantTimeoutSec: 600,
+		},
+		{
+			name:           "task_timeout_does_not_reduce_higher_agent_default",
+			globalSeconds:  120,
+			agentSeconds:   700,
+			taskSeconds:    240,
+			wantTimeoutSec: 700,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveAgentTimeout(tc.globalSeconds, tc.agentSeconds, tc.taskSeconds)
+			want := time.Duration(tc.wantTimeoutSec) * time.Second
+			if got != want {
+				t.Fatalf("resolveAgentTimeout(%d, %d, %d) = %v, want %v",
+					tc.globalSeconds, tc.agentSeconds, tc.taskSeconds, got, want)
+			}
+		})
+	}
+}
