@@ -25,6 +25,7 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 		Passed:                          13,
 		Failed:                          13,
 		Total:                           26,
+		SkippedExternalTasks:            3,
 		WeightedScore:                   10.5,
 		MaxPossibleScore:                20.5,
 		Timeout:                         600,
@@ -74,6 +75,9 @@ func TestGenerateLeaderboardSubmissionIncludesRunMetadata(t *testing.T) {
 	}
 	if submission.TotalInfraRetries != 3 {
 		t.Fatalf("total_infra_retries = %d, want 3", submission.TotalInfraRetries)
+	}
+	if submission.SkippedExternalTasks != 3 {
+		t.Fatalf("skipped_external_tasks = %d, want 3", submission.SkippedExternalTasks)
 	}
 	if submission.TotalSelfTestCommands != 17 {
 		t.Fatalf("total_self_test_commands = %d, want 17", submission.TotalSelfTestCommands)
@@ -151,6 +155,7 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		Passed:                          0,
 		Failed:                          0,
 		Total:                           0,
+		SkippedExternalTasks:            0,
 		PassRate:                        0,
 		UseMCPTools:                     false,
 		DisableMCP:                      false,
@@ -188,6 +193,7 @@ func TestEvalSummaryMarshalIncludesZeroAuditFields(t *testing.T) {
 		`"quota_affected_tasks":0`,
 		`"auth_affected_tasks":0`,
 		`"infra_affected_tasks":0`,
+		`"skipped_external_tasks":0`,
 		`"total_quota_retries":0`,
 		`"total_infra_retries":0`,
 		`"total_self_test_commands":0`,

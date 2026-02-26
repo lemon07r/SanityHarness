@@ -213,6 +213,8 @@ Notes:
 - Skills telemetry fields are emitted at both run and per-task levels:
   `skills_usage_rate`, `total_skills_usage_signals`, `tasks_with_skills_usage`,
   `skills_used`, and `skills_usage_signals`.
+- `skipped_external_tasks` counts tasks excluded from scoring due to external failures.
+- `external_failures[]` records skipped tasks with `failure_class`, retry counts, and error text.
 
 ### attestation.json Schema
 
@@ -283,7 +285,7 @@ Optimized for leaderboard submissions:
 
 Notes:
 - `submission.json` includes run metadata and audit counters:
-  `timeout`, `parallel`, `quota_affected_tasks`, and `total_quota_retries`.
+  `timeout`, `parallel`, `quota_affected_tasks`, `total_quota_retries`, and `skipped_external_tasks`.
 - Configuration booleans (`use_mcp_tools`, `use_skills`, `disable_mcp`, `sandbox`, `legacy`)
   are always emitted as explicit booleans.
 

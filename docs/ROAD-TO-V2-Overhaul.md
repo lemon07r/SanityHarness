@@ -166,6 +166,19 @@ This release makes `--use-skills` actually trigger skill usage by agents, rather
 
 Practical impact: Agents with `--use-skills` now actually discover and execute skill tools (e.g., `firecrawl search ...`) instead of ignoring them. Early testing shows ~27% of tasks triggering real skill commands, up from 0% in all previous runs.
 
+## What changed in v1.8.6 — external failure visibility
+
+This release fixes a reporting blind spot for resumable external failures (`auth`, `quota_exhausted`, `infra`).
+
+- **Skipped external tasks are now persisted in outputs.** Eval summary now includes:
+  - `skipped_external_tasks`
+  - `external_failures[]` (task id, failure class, retry counters, error text)
+- **Counters now include skipped external failures.** `auth_affected_tasks`, `quota_affected_tasks`, `infra_affected_tasks`, and retry totals are now computed from both scored results and skipped external failures.
+- **Report clarity improved.** `report.md` now includes a dedicated "External Failures (Skipped)" section and a "Skipped external tasks" quality metric so external/provider issues do not disappear from audit artifacts.
+- **Submission schema extended.** `submission.json` now includes `skipped_external_tasks` for leaderboard-side analysis.
+
+Practical impact: users can now distinguish "model failed task logic" from "task skipped due to external/provider failure" without needing missing workspace artifacts.
+
 ## Compatibility and comparing old runs
 
 `1.7.x` is intentionally not identical to `v1.6.1` behavior. If you are comparing against historical leaderboard-era runs, use legacy mode:

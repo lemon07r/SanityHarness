@@ -286,6 +286,16 @@ type EvalAggregate struct {
 	ValidateTime float64 `json:"validation_duration_seconds"`
 }
 
+// ExternalFailure captures a task skipped from scoring due to external issues.
+type ExternalFailure struct {
+	Task          string       `json:"task"`
+	FailureClass  FailureClass `json:"failure_class"`
+	Error         string       `json:"error,omitempty"`
+	QuotaRetries  int          `json:"quota_retries"`
+	InfraRetries  int          `json:"infra_retries"`
+	AgentTimedOut bool         `json:"agent_timed_out"`
+}
+
 // EvalSummary holds the overall evaluation summary.
 type EvalSummary struct {
 	Agent                           string                   `json:"agent"`
@@ -300,6 +310,7 @@ type EvalSummary struct {
 	Passed                          int                      `json:"passed"`
 	Failed                          int                      `json:"failed"`
 	Total                           int                      `json:"total"`
+	SkippedExternalTasks            int                      `json:"skipped_external_tasks"`
 	PassRate                        float64                  `json:"pass_rate"`
 	WeightedScore                   float64                  `json:"weighted_score,omitempty"`
 	MaxPossibleScore                float64                  `json:"max_possible_score,omitempty"`
@@ -312,6 +323,7 @@ type EvalSummary struct {
 	ByLanguage                      map[string]EvalAggregate `json:"by_language,omitempty"`
 	ByTier                          map[string]EvalAggregate `json:"by_tier,omitempty"`
 	ByDifficulty                    map[string]EvalAggregate `json:"by_difficulty,omitempty"`
+	ExternalFailures                []ExternalFailure        `json:"external_failures,omitempty"`
 	UseMCPTools                     bool                     `json:"use_mcp_tools"`
 	UseSkills                       bool                     `json:"use_skills"`
 	DisableMCP                      bool                     `json:"disable_mcp"`
@@ -872,6 +884,17 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	results := make([]EvalResult, 0, len(tasksToRun))
 	passed, failed := 0, 0
 	var resumableFailedTasks []string // External failures excluded from results (resumable via --resume)
+	var externalFailures []ExternalFailure
+	recordExternalFailure := func(r EvalResult) {
+		externalFailures = append(externalFailures, ExternalFailure{
+			Task:          r.Task,
+			FailureClass:  r.FailureClass,
+			Error:         r.Error,
+			QuotaRetries:  r.QuotaRetries,
+			InfraRetries:  r.InfraRetries,
+			AgentTimedOut: r.AgentTimedOut,
+		})
+	}
 
 	parallel := shared.Parallel
 	if parallel <= 0 {
@@ -896,6 +919,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 
 			// External failures are excluded from results so they can be resumed later.
 			if isResumableExternalFailure(result) {
+				recordExternalFailure(result)
 				fmt.Printf(" ⚠ %s — will be skipped (resumable)\n", externalFailureLabel(result.FailureClass))
 				resumableFailedTasks = append(resumableFailedTasks, fmt.Sprintf("%s [%s]", t.ID(), result.FailureClass))
 				removeTaskArtifactsForResume(outputDir, result)
@@ -1001,6 +1025,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 
 			// External failures are excluded from results so they can be resumed later.
 			if isResumableExternalFailure(jr.r) {
+				recordExternalFailure(jr.r)
 				fmt.Printf(" [%d/%d] %s ⚠ %s — will be skipped (resumable)\n", seen, len(tasksToRun), jr.r.Task, externalFailureLabel(jr.r.FailureClass))
 				resumableFailedTasks = append(resumableFailedTasks, fmt.Sprintf("%s [%s]", jr.r.Task, jr.r.FailureClass))
 				removeTaskArtifactsForResume(outputDir, jr.r)
@@ -1056,6 +1081,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 				// Drain remaining results from in-flight tasks.
 				for jr := range jobResults {
 					if isResumableExternalFailure(jr.r) {
+						recordExternalFailure(jr.r)
 						resumableFailedTasks = append(resumableFailedTasks, fmt.Sprintf("%s [%s]", jr.r.Task, jr.r.FailureClass))
 						removeTaskArtifactsForResume(outputDir, jr.r)
 					} else {
@@ -1110,6 +1136,9 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return taskOrder[results[i].Task] < taskOrder[results[j].Task]
+	})
+	sort.Slice(externalFailures, func(i, j int) bool {
+		return externalFailures[i].Task < externalFailures[j].Task
 	})
 
 	// Recompute status and weighted score for all results.
@@ -1169,6 +1198,9 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	fmt.Printf(" Passed:    %d\n", passed)
 	fmt.Printf(" Failed:    %d\n", failed)
 	fmt.Printf(" Total:     %d\n", total)
+	if len(externalFailures) > 0 {
+		fmt.Printf(" Skipped:   %d (external auth/quota/infra)\n", len(externalFailures))
+	}
 	fmt.Printf(" Pass Rate: %.1f%%\n", passRate)
 	fmt.Println()
 
@@ -1185,8 +1217,10 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	var totalWeightedScore float64
 	var maxPossibleScore float64
 	var integrityViolations int
+	var quotaAffectedTasks int
 	var authAffectedTasks int
 	var infraAffectedTasks int
+	var totalQuotaRetries int
 	var totalSelfTestCommands int
 	var totalInfraRetries int
 	var totalToolchainInstallAttempts int
@@ -1212,6 +1246,19 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		agg.ValidateTime += r.ValidateTime
 		m[key] = agg
 	}
+	accumulateFailureStats := func(class FailureClass, quotaRetries, infraRetries int) {
+		if class == FailureClassQuotaRecoverable || class == FailureClassQuotaExhausted {
+			quotaAffectedTasks++
+		}
+		if class == FailureClassAuth {
+			authAffectedTasks++
+		}
+		if class == FailureClassInfra {
+			infraAffectedTasks++
+		}
+		totalQuotaRetries += quotaRetries
+		totalInfraRetries += infraRetries
+	}
 
 	for _, r := range results {
 		totalDuration += r.Duration
@@ -1220,7 +1267,6 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		totalPromptChars += r.PromptChars
 		totalWeightedScore += r.WeightedScore
 		maxPossibleScore += r.Weight
-		totalInfraRetries += r.InfraRetries
 		totalSelfTestCommands += r.SelfTestCommands
 		totalToolchainInstallAttempts += r.ToolchainInstallAttempts
 		totalOutOfWorkspaceReadAttempts += r.OutOfWorkspaceReadAttempts
@@ -1246,12 +1292,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		if r.Status == task.StatusIntegrityViolation {
 			integrityViolations++
 		}
-		if r.FailureClass == FailureClassAuth {
-			authAffectedTasks++
-		}
-		if r.FailureClass == FailureClassInfra {
-			infraAffectedTasks++
-		}
+		accumulateFailureStats(r.FailureClass, r.QuotaRetries, r.InfraRetries)
 
 		addAgg(byLanguage, r.Language, r)
 		if r.Tier != "" {
@@ -1260,6 +1301,10 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		if r.Difficulty != "" {
 			addAgg(byDifficulty, r.Difficulty, r)
 		}
+	}
+
+	for _, f := range externalFailures {
+		accumulateFailureStats(f.FailureClass, f.QuotaRetries, f.InfraRetries)
 	}
 
 	// Calculate weighted pass rate
@@ -1282,16 +1327,6 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		return m
 	}
 
-	// Aggregate quota statistics
-	var quotaAffectedTasks int
-	var totalQuotaRetries int
-	for _, r := range results {
-		if r.FailureClass == FailureClassQuotaRecoverable || r.FailureClass == FailureClassQuotaExhausted {
-			quotaAffectedTasks++
-		}
-		totalQuotaRetries += r.QuotaRetries
-	}
-
 	// Default model to "unknown" if not specified
 	model := spec.Model
 	if model == "" {
@@ -1311,6 +1346,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		Passed:                          passed,
 		Failed:                          failed,
 		Total:                           total,
+		SkippedExternalTasks:            len(externalFailures),
 		PassRate:                        passRate,
 		WeightedScore:                   totalWeightedScore,
 		MaxPossibleScore:                maxPossibleScore,
@@ -1323,6 +1359,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		ByLanguage:                      finalize(byLanguage),
 		ByTier:                          finalize(byTier),
 		ByDifficulty:                    finalize(byDifficulty),
+		ExternalFailures:                externalFailures,
 		UseMCPTools:                     shared.UseMCPTools,
 		UseSkills:                       shared.UseSkills,
 		DisableMCP:                      shared.DisableMCP,
@@ -3186,11 +3223,12 @@ type LeaderboardSubmission struct {
 	Timestamp string `json:"timestamp"`
 
 	// Core metrics
-	PassRate         float64 `json:"pass_rate"`
-	WeightedPassRate float64 `json:"weighted_pass_rate"`
-	Passed           int     `json:"passed"`
-	Failed           int     `json:"failed"`
-	Total            int     `json:"total"`
+	PassRate             float64 `json:"pass_rate"`
+	WeightedPassRate     float64 `json:"weighted_pass_rate"`
+	Passed               int     `json:"passed"`
+	Failed               int     `json:"failed"`
+	Total                int     `json:"total"`
+	SkippedExternalTasks int     `json:"skipped_external_tasks"`
 
 	// Weighted scoring
 	WeightedScore    float64 `json:"weighted_score"`
@@ -3258,6 +3296,7 @@ func generateLeaderboardSubmission(summary EvalSummary, attestation *EvalAttesta
 		Passed:                          summary.Passed,
 		Failed:                          summary.Failed,
 		Total:                           summary.Total,
+		SkippedExternalTasks:            summary.SkippedExternalTasks,
 		WeightedScore:                   summary.WeightedScore,
 		MaxPossibleScore:                summary.MaxPossibleScore,
 		IntegrityViolations:             summary.IntegrityViolations,
@@ -3321,6 +3360,7 @@ func generateEvalReport(summary EvalSummary, attestation *EvalAttestation) strin
 	writeReportByLanguage(&sb, summary)
 	writeReportByTier(&sb, summary)
 	writeReportTaskResults(&sb, summary)
+	writeReportExternalFailures(&sb, summary)
 	writeReportErrors(&sb, summary)
 	writeReportVerification(&sb, attestation)
 	sb.WriteString("---\n")
@@ -3368,6 +3408,9 @@ func writeReportQuality(sb *strings.Builder, summary EvalSummary) {
 	sb.WriteString("## Quality Breakdown\n\n")
 	fmt.Fprintf(sb, "- **Integrity Violations** (modified test files): %d\n", summary.IntegrityViolations)
 	fmt.Fprintf(sb, "- **Failures**: %d\n", summary.Failed-summary.IntegrityViolations)
+	if summary.SkippedExternalTasks > 0 {
+		fmt.Fprintf(sb, "- **Skipped external tasks** (not scored): %d\n", summary.SkippedExternalTasks)
+	}
 	fmt.Fprintf(sb, "- **Quota-affected tasks**: %d\n", summary.QuotaAffectedTasks)
 	fmt.Fprintf(sb, "- **Auth-affected tasks**: %d\n", summary.AuthAffectedTasks)
 	fmt.Fprintf(sb, "- **Infra-affected tasks**: %d\n", summary.InfraAffectedTasks)
@@ -3378,6 +3421,12 @@ func writeReportQuality(sb *strings.Builder, summary EvalSummary) {
 			continue
 		}
 		failureCounts[r.FailureClass]++
+	}
+	for _, f := range summary.ExternalFailures {
+		if f.FailureClass == FailureClassNone {
+			continue
+		}
+		failureCounts[f.FailureClass]++
 	}
 	if len(failureCounts) > 0 {
 		sb.WriteString("\n| Failure Class | Tasks |\n")
@@ -3496,6 +3545,20 @@ func getResultStatusDisplay(r EvalResult) (icon, text string) {
 	default:
 		return "❌", "FAIL"
 	}
+}
+
+func writeReportExternalFailures(sb *strings.Builder, summary EvalSummary) {
+	if len(summary.ExternalFailures) == 0 {
+		return
+	}
+
+	sb.WriteString("## External Failures (Skipped)\n\n")
+	sb.WriteString("| Task | Class | Quota Retries | Infra Retries |\n")
+	sb.WriteString("|------|-------|---------------|---------------|\n")
+	for _, f := range summary.ExternalFailures {
+		fmt.Fprintf(sb, "| %s | %s | %d | %d |\n", f.Task, f.FailureClass, f.QuotaRetries, f.InfraRetries)
+	}
+	sb.WriteString("\n")
 }
 
 func writeReportErrors(sb *strings.Builder, summary EvalSummary) {
