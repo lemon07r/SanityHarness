@@ -133,9 +133,8 @@ func TestBuildAgentPromptWithSkills(t *testing.T) {
 
 	promptWithoutSkills := buildAgentPrompt(tt, false, false, "")
 	for _, forbidden := range []string{
-		"- You have access to Agent Skills located in the '.agents/skills/' directory. Read the 'SKILL.md' files within these directories to understand the available tools and their usage. Execute their commands directly in your terminal.",
-		"- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective.",
-		"- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code.",
+		"Agent Skills located in the '.agents/skills/' directory",
+		"MUST use your Agent Skills",
 	} {
 		if strings.Contains(promptWithoutSkills, forbidden) {
 			t.Fatalf("prompt without skills should not contain %q\n\nPrompt:\n%s", forbidden, promptWithoutSkills)
@@ -144,9 +143,11 @@ func TestBuildAgentPromptWithSkills(t *testing.T) {
 
 	promptWithSkills := buildAgentPrompt(tt, false, true, "")
 	for _, s := range []string{
-		"- You have access to Agent Skills located in the '.agents/skills/' directory. Read the 'SKILL.md' files within these directories to understand the available tools and their usage. Execute their commands directly in your terminal.",
-		"- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective.",
-		"- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code.",
+		"Agent Skills located in the '.agents/skills/' directory",
+		"Read the SKILL.md files",
+		"Execute skill commands directly in your terminal",
+		"MUST use your Agent Skills to assist with this task",
+		"Use your Agent Skills to research the problem",
 	} {
 		if !strings.Contains(promptWithSkills, s) {
 			t.Fatalf("prompt with skills missing %q\n\nPrompt:\n%s", s, promptWithSkills)

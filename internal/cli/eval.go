@@ -2197,9 +2197,15 @@ func buildAgentPrompt(t *task.Task, useMCPTools, useSkills bool, mcpPrompt strin
 		mcpRuleLine = "\n- You MUST actively use your MCP server tools to assist you with your work. Do NOT ignore them. Make your first MCP server tool call before writing any code."
 	}
 	if useSkills {
-		skillsEnvironmentLine = "\n- You have access to Agent Skills located in the '.agents/skills/' directory. Read the 'SKILL.md' files within these directories to understand the available tools and their usage. Execute their commands directly in your terminal."
-		skillsImportantLine = "\n- Load at least one relevant Agent Skill when available, and prefer Agent Skills over manual alternatives if both can accomplish the same step or objective."
-		skillsRuleLine = "\n- You MUST actively use your Agent Skills to assist you with your work. Do NOT ignore them. Make your first Agent Skill call before writing any code."
+		skillsEnvironmentLine = "\n- You have access to Agent Skills located in the '.agents/skills/' directory. Read the 'SKILL.md' files within each skill subdirectory to learn what tools are available and how to use them. Execute skill commands directly in your terminal."
+		skillsImportantLine = "\n- There may be hidden tests that check edge cases beyond what the visible tests cover. Use your Agent Skills to research the problem domain and uncover edge cases, idiomatic patterns, and best practices BEFORE you start coding."
+		skillsRuleLine = "\n- You MUST use your Agent Skills to assist with this task. Read the SKILL.md files first, then actively use the skill tools before and during your implementation. Do NOT skip this step."
+		taskInstructions = `1. Read the SKILL.md files in '.agents/skills/' to discover your available tools.
+2. Read the stub file(s) and test file(s) to understand the task requirements.
+3. Use your Agent Skills to research the problem and gather useful context.
+4. Implement the stub file(s), incorporating what you learned.
+5. Ensure your solution handles edge cases and performance constraints.
+6. Ensure thread-safety if the tests use concurrent operations.`
 	}
 
 	prompt := fmt.Sprintf(`You are solving a coding task called "%s".
