@@ -21,6 +21,7 @@ type AgentConfig struct {
 	Env                   map[string]string `toml:"env"`                     // Environment variables
 	DefaultTimeout        int               `toml:"default_timeout"`         // Per-agent minimum timeout in seconds (overrides harness default if larger)
 	MCPPrompt             string            `toml:"mcp_prompt,omitempty"`    // Agent-specific MCP tool guidance (appended when --use-mcp-tools is set)
+	PromptPrefix          string            `toml:"prompt_prefix,omitempty"` // Prefix prepended to the prompt (e.g., "ulw" for ultrawork mode)
 }
 
 // DefaultAgents provides built-in configurations for popular coding agents.
@@ -46,6 +47,16 @@ var DefaultAgents = map[string]AgentConfig{
 		ModelFlagPosition:     "after",
 		ReasoningFlag:         "--variant",
 		ReasoningFlagPosition: "after",
+		MCPPrompt:             "Your environment includes additional MCP tools. Incorporate them into your workflow the same way you would any built-in command. If an MCP tool can do something more reliably or with better context than your default approach, prefer it.",
+	},
+	"omo": {
+		Command:               "opencode",
+		Args:                  []string{"run", "{prompt}"},
+		ModelFlag:             "-m",
+		ModelFlagPosition:     "after",
+		ReasoningFlag:         "--variant",
+		ReasoningFlagPosition: "after",
+		PromptPrefix:          "ulw",
 		MCPPrompt:             "Your environment includes additional MCP tools. Incorporate them into your workflow the same way you would any built-in command. If an MCP tool can do something more reliably or with better context than your default approach, prefer it.",
 	},
 	"claude": {

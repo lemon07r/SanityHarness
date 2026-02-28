@@ -2571,6 +2571,11 @@ func buildAgentCommand(
 		}
 	}
 
+	// Apply prompt prefix if configured (e.g., "ulw" for OMO ultrawork mode).
+	if agentCfg.PromptPrefix != "" {
+		prompt = agentCfg.PromptPrefix + " " + prompt
+	}
+
 	// Process args, replacing {prompt} placeholder
 	for _, arg := range agentCfg.Args {
 		if arg == "{prompt}" {
@@ -3042,7 +3047,7 @@ func buildOpenCodeMCPConfig(disableMCP, useMCPTools bool) string {
 // buildAgentEnv creates the environment variable slice for an agent command.
 // It merges the agent's configured env vars with any runtime injections.
 func buildAgentEnv(agentEnv map[string]string, disableMCP, useMCPTools bool, agentName string) []string {
-	needsOpenCodeConfig := agentName == "opencode" && (disableMCP || useMCPTools)
+	needsOpenCodeConfig := (agentName == "opencode" || agentName == "omo") && (disableMCP || useMCPTools)
 	if len(agentEnv) == 0 && !needsOpenCodeConfig {
 		return nil
 	}
