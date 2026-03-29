@@ -166,6 +166,12 @@ var DefaultAgents = map[string]AgentConfig{
 		ReasoningFlagPosition: "before",
 		DefaultTimeout:        240, // pi buffers all stdout until tool calls complete; needs more time than streaming agents
 	},
+	"forge": {
+		Command:           "forge",
+		Args:              []string{"-p", "{prompt}"},
+		ModelFlag:         "--model",
+		ModelFlagPosition: "before",
+	},
 }
 
 // Config holds all configuration for SanityHarness.
@@ -244,7 +250,9 @@ var Default = Config{
 			".codex",
 			".kilocode",
 			".factory",
+			".forge",
 			".go",
+			"forge",
 			"go",
 		},
 		SharedReadOnlyDirs: []string{

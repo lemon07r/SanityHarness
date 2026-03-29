@@ -4,8 +4,12 @@ specifications.md
 # JetBrains Junie
 .junie/
 
+# Factory Droid
+.factory/
+
 # Agent guidance (local only)
 AGENTS.md
+CLAUDE.md
 
 # Binaries (root level only, not cmd/sanity/)
 /sanity
