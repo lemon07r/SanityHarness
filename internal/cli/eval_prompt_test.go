@@ -973,6 +973,18 @@ func TestDetectQuotaError(t *testing.T) {
 			wantHasError:    true,
 			wantRecoverable: true,
 		},
+		{
+			name:            "old quota error in previous attempt, clean latest attempt",
+			content:         "HTTP 429 Too Many Requests\n\n=== RETRY 1 (after 30s delay) ===\n\nagent completed successfully\n",
+			wantHasError:    false,
+			wantRecoverable: false,
+		},
+		{
+			name:            "quota error only in latest attempt",
+			content:         "agent started\n\n=== RETRY 1 (after 30s delay) ===\n\nHTTP 429 Too Many Requests\n",
+			wantHasError:    true,
+			wantRecoverable: true,
+		},
 	}
 
 	for _, tc := range tests {

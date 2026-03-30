@@ -3924,13 +3924,30 @@ func canonicalizeExistingPath(path string) string {
 	return resolved
 }
 
+// lastAttemptContent returns the content of the most recent attempt from the
+// agent log. Retry attempts are separated by "=== RETRY N ..." markers; this
+// function returns everything after the last such marker (or the full content
+// if no markers exist).
+func lastAttemptContent(content []byte) []byte {
+	marker := []byte("=== RETRY ")
+	idx := bytes.LastIndex(content, marker)
+	if idx < 0 {
+		return content
+	}
+	// Skip past the marker line.
+	if nl := bytes.IndexByte(content[idx:], '\n'); nl >= 0 {
+		return content[idx+nl+1:]
+	}
+	return content[idx:]
+}
+
 // detectAuthError checks if agent log contains auth/authz errors.
 func detectAuthError(logPath string) bool {
 	content, err := os.ReadFile(logPath)
 	if err != nil {
 		return false
 	}
-	lower := strings.ToLower(string(content))
+	lower := strings.ToLower(string(lastAttemptContent(content)))
 	for _, pattern := range authFailurePatterns {
 		if strings.Contains(lower, pattern) {
 			return true
@@ -3948,7 +3965,7 @@ func detectQuotaError(logPath string) (bool, bool) {
 		return false, false
 	}
 
-	lower := strings.ToLower(string(content))
+	lower := strings.ToLower(string(lastAttemptContent(content)))
 
 	// Check for non-recoverable patterns first
 	for _, pattern := range nonRecoverableQuotaPatterns {
@@ -4012,15 +4029,16 @@ func isInfraFailure(logPath, workspaceDir string, workspaceReadyAt time.Time) bo
 		return true // No log file at all is an infra failure
 	}
 
-	// Strip retry separator lines (e.g., "=== RETRY 1 (after 30s delay) ===")
-	// and whitespace to check if there's any real agent output.
+	// Only examine the latest attempt's output so that stale retry
+	// content does not mask a successful attempt.
+	latest := lastAttemptContent(data)
+
+	// Strip harness-injected lines and whitespace to check if there's
+	// any real agent output.
 	var meaningful []byte
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for _, line := range bytes.Split(latest, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {
-			continue
-		}
-		if bytes.HasPrefix(trimmed, []byte("=== RETRY ")) && bytes.HasSuffix(trimmed, []byte("===")) {
 			continue
 		}
 		if bytes.HasPrefix(trimmed, []byte("HARNESS: agent timed out")) {

@@ -199,6 +199,16 @@ This release adds two new agent configurations and a lint fix.
 - **New agents: `forge` and `omo`.** Added built-in configurations for the Forge and Omo coding agents, including `PromptPrefix` support for agents that require prompt preambles.
 - **Lint fix in result tests.** Resolved pre-existing staticcheck SA5011 warnings (possible nil pointer dereference) in `result_test.go`.
 
+## What changed in v1.8.10 — retry detection scans only latest attempt
+
+This release fixes a bug where quota/auth/infra error detection scanned the entire appended `agent.log` instead of only the most recent attempt, causing old errors to be re-detected on every retry and resume.
+
+- **`lastAttemptContent()` helper.** Extracts content after the last `=== RETRY N ...` marker in the agent log, so only the most recent attempt's output is examined for error patterns.
+- **Scoped error detection.** `detectQuotaError`, `detectAuthError`, and `isInfraFailure` now use `lastAttemptContent()` instead of reading the full log file, preventing stale errors from poisoning fresh retries.
+- **New test coverage.** Added tests verifying that old quota errors with a clean latest attempt produce no false positive, and that errors only in the latest attempt are correctly detected.
+
+Practical impact: retries and resumes no longer immediately re-trigger quota exhaustion from errors logged in earlier attempts.
+
 ## What changed in v1.8.9 — resume gives fresh retry budget
 
 This release fixes resume behavior for quota-exhausted tasks.
