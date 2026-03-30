@@ -115,6 +115,7 @@ func TestLastAttempt(t *testing.T) {
 	last := session.LastAttempt()
 	if last == nil {
 		t.Fatal("LastAttempt should not be nil")
+		return
 	}
 	if last.Number != 2 {
 		t.Errorf("LastAttempt.Number = %d, want 2", last.Number)

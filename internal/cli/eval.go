@@ -57,6 +57,10 @@ var (
 	evalSandboxSharedRO []string
 	evalResume          string
 	evalRepeat          int
+
+	// evalPriorRetries tracks cumulative retry counts from previous resume
+	// attempts, keyed by task ID (e.g. "zig/comptime-json").
+	evalPriorRetries map[string]ExternalFailure
 )
 
 // Quota retry configuration.
@@ -496,6 +500,15 @@ Examples:
 			if prevSummary != nil {
 				previousResults = prevSummary.Results
 				timestamp = prevSummary.Timestamp
+
+				// Carry forward retry counts from previous external failures so
+				// cumulative retries across resumes are tracked. Without this,
+				// each resume resets the retry budget and quota-exhausted tasks
+				// retry indefinitely.
+				evalPriorRetries = make(map[string]ExternalFailure, len(prevSummary.ExternalFailures))
+				for _, f := range prevSummary.ExternalFailures {
+					evalPriorRetries[f.Task] = f
+				}
 			}
 
 			// Load previous attestation to preserve hashes of tasks whose workspaces are gone.
@@ -1949,22 +1962,30 @@ func executeAgentWithRetries(
 ) agentExecutionResult {
 	var result agentExecutionResult
 	var quotaAttempts, infraAttempts int
+	var localAttempts int    // retries within this run (controls delay/logging)
 	var lastRetryType string // "quota" or "infra"
 
-	for {
-		totalAttempt := quotaAttempts + infraAttempts
+	// Seed retry counts from previous resume attempts so cumulative retries
+	// are tracked across resumes. This ensures tasks that already exhausted
+	// their retry budget across multiple resumes hit the cap immediately
+	// instead of resetting to zero each time.
+	if prior, ok := evalPriorRetries[t.ID()]; ok {
+		quotaAttempts = prior.QuotaRetries
+		infraAttempts = prior.InfraRetries
+	}
 
-		// On retry, wait (interruptible) and log.
-		if totalAttempt > 0 {
+	for {
+		// On retry within this run, wait (interruptible) and log.
+		if localAttempts > 0 {
 			var delay time.Duration
 			if lastRetryType == "infra" {
-				delay = getInfraRetryDelay(infraAttempts)
+				delay = getInfraRetryDelay(localAttempts)
 			} else {
-				delay = getRetryDelay(quotaAttempts)
+				delay = getRetryDelay(localAttempts)
 			}
 			logger.Info("retrying agent execution",
 				"task", t.ID(),
-				"attempt", totalAttempt,
+				"attempt", localAttempts,
 				"type", lastRetryType,
 				"delay", delay)
 			select {
@@ -1979,7 +2000,7 @@ func executeAgentWithRetries(
 		}
 
 		// Run single attempt.
-		attemptResult := runAgentAttempt(ctx, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, totalAttempt)
+		attemptResult := runAgentAttempt(ctx, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, localAttempts)
 		result.totalTime += attemptResult.duration
 		result.timedOut = attemptResult.timedOut
 
@@ -2000,6 +2021,7 @@ func executeAgentWithRetries(
 				break
 			}
 			quotaAttempts++
+			localAttempts++
 			result.quotaRetries = quotaAttempts
 			result.failureClass = FailureClassQuotaRecoverable
 			if quotaAttempts >= quotaMaxRetries {
@@ -2015,6 +2037,7 @@ func executeAgentWithRetries(
 		// Check for infra failures (no quota error detected).
 		if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
 			infraAttempts++
+			localAttempts++
 			result.infraRetries = infraAttempts
 			if infraAttempts >= infraMaxRetries {
 				result.infraFailure = true
