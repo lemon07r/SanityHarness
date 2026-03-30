@@ -192,15 +192,21 @@ This release fixes a timeout precedence bug that caused some tasks to ignore hig
 
 Practical impact: if you run with `--timeout 600`, tasks that specify `agent_timeout = 240` will now use `600` instead of being cut down to `240`.
 
-## What changed in v1.8.8 — resume retry carry-forward and new agents
+## What changed in v1.8.8 — new agents and lint fix
 
-This release fixes a resume bug and adds two new agent configurations.
+This release adds two new agent configurations and a lint fix.
 
-- **Resume now carries forward retry counts.** Previously, each `--resume` attempt reset the quota/infra retry budget to zero, causing tasks stuck on provider errors to retry indefinitely across resumes. Cumulative retry counts from `external_failures[]` are now seeded into the retry loop so tasks that already exhausted their budget are skipped immediately on the next resume.
 - **New agents: `forge` and `omo`.** Added built-in configurations for the Forge and Omo coding agents, including `PromptPrefix` support for agents that require prompt preambles.
 - **Lint fix in result tests.** Resolved pre-existing staticcheck SA5011 warnings (possible nil pointer dereference) in `result_test.go`.
 
-Practical impact: resuming an eval with quota-exhausted tasks no longer burns through the full retry budget again on every resume attempt.
+## What changed in v1.8.9 — resume gives fresh retry budget
+
+This release fixes resume behavior for quota-exhausted tasks.
+
+- **Resume now gives tasks a clean retry slate.** Previously, cumulative retry counts were carried forward across resumes, causing quota-exhausted tasks to be immediately skipped on every subsequent `--resume` without any new attempts. Resume now resets the retry budget so the user's explicit choice to retry is honored.
+- **Stale task artifacts cleaned on resume.** The existing `cleanIncompleteTaskDirs` removes old `agent.log` files (which may contain stale quota error patterns) before retrying, ensuring fresh attempts are not poisoned by previous output.
+
+Practical impact: `--resume` on an eval with quota-exhausted tasks now actually retries those tasks instead of instantly skipping them again.
 
 ## Compatibility and comparing old runs
 
