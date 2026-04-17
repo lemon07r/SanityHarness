@@ -87,6 +87,18 @@ const (
 	infraRetryDelay5 = 240 * time.Second
 )
 
+// Agent-timeout retry configuration. Plain agent timeouts (the agent produced
+// *some* output but then stalled for the whole wall-clock budget) are not
+// infra failures — isInfraFailure sees meaningful content and returns false —
+// but they are also not the agent "meaningfully failing", since we have no
+// signal either way about what happened. This often looks like a long-tail
+// SSE hang on the model/provider side. One cheap retry rescues the common
+// case without burning much time.
+const (
+	agentTimeoutMaxRetries  = 1
+	agentTimeoutRetryDelay1 = 15 * time.Second
+)
+
 // Patterns indicating recoverable rate limit errors (worth retrying).
 // These use contextual phrases to avoid false positives from bare numbers
 // appearing in durations (e.g. "0.503s"), UUIDs, git hashes, line numbers, etc.
@@ -262,6 +274,7 @@ type EvalResult struct {
 	WeightedScore                float64           `json:"weighted_score,omitempty"`
 	QuotaRetries                 int               `json:"quota_retries"`
 	InfraRetries                 int               `json:"infra_retries"`
+	AgentTimeoutRetries          int               `json:"agent_timeout_retries,omitempty"`
 	QuotaExhausted               bool              `json:"quota_exhausted"`
 	InfraFailure                 bool              `json:"infra_failure"`
 	SelfTestCommands             int               `json:"self_test_commands"`
@@ -334,6 +347,9 @@ type EvalSummary struct {
 	InfraAffectedTasks              int                      `json:"infra_affected_tasks"`
 	TotalQuotaRetries               int                      `json:"total_quota_retries"`
 	TotalInfraRetries               int                      `json:"total_infra_retries"`
+	TotalAgentTimeoutRetries        int                      `json:"total_agent_timeout_retries"`
+	AgentTimeoutTasks               int                      `json:"agent_timeout_tasks"`
+	AgentTimeoutRetriedTasks        int                      `json:"agent_timeout_retried_tasks"`
 	TotalSelfTestCommands           int                      `json:"total_self_test_commands"`
 	TotalToolchainInstallAttempts   int                      `json:"total_toolchain_install_attempts"`
 	TotalOutOfWorkspaceReadAttempts int                      `json:"total_out_of_workspace_read_attempts"`
@@ -1223,6 +1239,9 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	var totalQuotaRetries int
 	var totalSelfTestCommands int
 	var totalInfraRetries int
+	var totalAgentTimeoutRetries int
+	var agentTimeoutTasks int        // tasks that ultimately ended as a timeout
+	var agentTimeoutRetriedTasks int // subset of above that got at least one retry
 	var totalToolchainInstallAttempts int
 	var totalOutOfWorkspaceReadAttempts int
 	var totalToolchainSearchAttempts int
@@ -1292,6 +1311,13 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		if r.Status == task.StatusIntegrityViolation {
 			integrityViolations++
 		}
+		if r.AgentTimedOut {
+			agentTimeoutTasks++
+			if r.AgentTimeoutRetries > 0 {
+				agentTimeoutRetriedTasks++
+			}
+		}
+		totalAgentTimeoutRetries += r.AgentTimeoutRetries
 		accumulateFailureStats(r.FailureClass, r.QuotaRetries, r.InfraRetries)
 
 		addAgg(byLanguage, r.Language, r)
@@ -1370,6 +1396,9 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		InfraAffectedTasks:              infraAffectedTasks,
 		TotalQuotaRetries:               totalQuotaRetries,
 		TotalInfraRetries:               totalInfraRetries,
+		TotalAgentTimeoutRetries:        totalAgentTimeoutRetries,
+		AgentTimeoutTasks:               agentTimeoutTasks,
+		AgentTimeoutRetriedTasks:        agentTimeoutRetriedTasks,
 		TotalSelfTestCommands:           totalSelfTestCommands,
 		TotalToolchainInstallAttempts:   totalToolchainInstallAttempts,
 		TotalOutOfWorkspaceReadAttempts: totalOutOfWorkspaceReadAttempts,
@@ -1657,6 +1686,7 @@ func applyAgentExecutionResult(result *EvalResult, agentResult agentExecutionRes
 	result.AgentTimedOut = agentResult.timedOut
 	result.QuotaRetries = agentResult.quotaRetries
 	result.InfraRetries = agentResult.infraRetries
+	result.AgentTimeoutRetries = agentResult.agentTimeoutRetries
 	result.QuotaExhausted = agentResult.quotaExhausted
 	result.InfraFailure = agentResult.infraFailure
 	result.FailureClass = agentResult.failureClass
@@ -1751,7 +1781,7 @@ func detectAndRecordIntegrityViolation(
 	if err := writeIntegrityViolationArtifacts(taskOutputDir, loader, t, workspaceDir, modified, result.Error); err != nil {
 		logger.Warn("failed to write integrity artifacts", "task", t.ID(), "error", err)
 	}
-	writeValidationLog(
+	writeValidationLogWithStatus(
 		validationLogPath,
 		"",
 		t.ValidationCommand(),
@@ -1759,6 +1789,7 @@ func detectAndRecordIntegrityViolation(
 		0,
 		false,
 		errors.New("skipped due integrity violation"),
+		"integrity_skipped",
 	)
 	return true, nil
 }
@@ -1923,13 +1954,14 @@ func finalizeEvalResult(result *EvalResult, start time.Time, weight task.Weight)
 
 // agentExecutionResult holds the outcome of agent execution with retries.
 type agentExecutionResult struct {
-	totalTime      float64
-	timedOut       bool
-	quotaRetries   int
-	quotaExhausted bool
-	infraRetries   int
-	infraFailure   bool // true when agent produced no output after all retries
-	failureClass   FailureClass
+	totalTime           float64
+	timedOut            bool
+	quotaRetries        int
+	quotaExhausted      bool
+	infraRetries        int
+	infraFailure        bool // true when agent produced no output after all retries
+	agentTimeoutRetries int  // retries triggered purely by wall-clock agent timeout
+	failureClass        FailureClass
 }
 
 // executeAgentWithRetries runs the agent command with quota-aware retry logic.
@@ -1948,93 +1980,136 @@ func executeAgentWithRetries(
 	workspaceReadyAt time.Time,
 ) agentExecutionResult {
 	var result agentExecutionResult
-	var quotaAttempts, infraAttempts int
+	var quotaAttempts, infraAttempts, agentTimeoutAttempts int
 	var localAttempts int    // retries within this run (controls delay/logging)
-	var lastRetryType string // "quota" or "infra"
+	var lastRetryType string // "quota", "infra", or "agent_timeout"
 
-	for {
-		// On retry within this run, wait (interruptible) and log.
-		if localAttempts > 0 {
-			var delay time.Duration
-			if lastRetryType == "infra" {
-				delay = getInfraRetryDelay(localAttempts)
-			} else {
-				delay = getRetryDelay(localAttempts)
-			}
-			logger.Info("retrying agent execution",
-				"task", t.ID(),
-				"attempt", localAttempts,
-				"type", lastRetryType,
-				"delay", delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-			}
-		}
-
-		// Check for interrupt before starting attempt.
-		if ctx.Err() != nil {
-			break
-		}
-
+	for waitBeforeRetry(ctx, t.ID(), localAttempts, lastRetryType) {
 		// Run single attempt.
 		attemptResult := runAgentAttempt(ctx, agentCfg, prompt, model, workspaceDir, agentLogPath, agentTimeout, agent, localAttempts)
 		result.totalTime += attemptResult.duration
 		result.timedOut = attemptResult.timedOut
 
-		// Check non-recoverable auth errors first (no retries).
-		if detectAuthError(agentLogPath) {
-			result.failureClass = FailureClassAuth
-			logger.Debug("authentication error, skipping retries", "task", t.ID())
+		decision := classifyAttempt(attemptResult, agentLogPath, workspaceDir, workspaceReadyAt,
+			&quotaAttempts, &infraAttempts, &agentTimeoutAttempts, &result)
+		if decision.done {
 			break
 		}
-
-		// Check quota/provider errors.
-		hasError, isRecoverable := detectQuotaError(agentLogPath)
-		if hasError {
-			if !isRecoverable {
-				result.quotaExhausted = true
-				result.failureClass = FailureClassQuotaExhausted
-				logger.Debug("non-recoverable quota error, skipping retries", "task", t.ID())
-				break
-			}
-			quotaAttempts++
-			localAttempts++
-			result.quotaRetries = quotaAttempts
-			result.failureClass = FailureClassQuotaRecoverable
-			if quotaAttempts >= quotaMaxRetries {
-				result.quotaExhausted = true
-				result.failureClass = FailureClassQuotaExhausted
-				logger.Debug("max quota retries reached", "task", t.ID(), "retries", quotaMaxRetries)
-				break
-			}
-			lastRetryType = "quota"
-			continue
-		}
-
-		// Check for infra failures (no quota error detected).
-		if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
-			infraAttempts++
-			localAttempts++
-			result.infraRetries = infraAttempts
-			if infraAttempts >= infraMaxRetries {
-				result.infraFailure = true
-				result.failureClass = FailureClassInfra
-				logger.Debug("max infra retries reached", "task", t.ID(), "retries", infraMaxRetries)
-				break
-			}
-			lastRetryType = "infra"
-			continue
-		}
-
-		// Success — no quota error, no infra failure.
-		if result.failureClass == "" {
-			result.failureClass = FailureClassNone
-		}
-		break
+		localAttempts++
+		lastRetryType = decision.retryType
 	}
 
 	return result
+}
+
+// waitBeforeRetry sleeps (interruptibly) before a retry attempt and returns
+// false if the context has been cancelled. Returns true if the caller should
+// proceed with the attempt.
+func waitBeforeRetry(ctx context.Context, taskID string, localAttempts int, lastRetryType string) bool {
+	if localAttempts > 0 {
+		var delay time.Duration
+		switch lastRetryType {
+		case "infra":
+			delay = getInfraRetryDelay(localAttempts)
+		case "agent_timeout":
+			delay = agentTimeoutRetryDelay1
+		default:
+			delay = getRetryDelay(localAttempts)
+		}
+		logger.Info("retrying agent execution",
+			"task", taskID,
+			"attempt", localAttempts,
+			"type", lastRetryType,
+			"delay", delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+		}
+	}
+	return ctx.Err() == nil
+}
+
+// attemptDecision describes what the retry loop should do after an attempt.
+type attemptDecision struct {
+	done      bool   // true if loop should exit
+	retryType string // "quota", "infra", "agent_timeout" — only when !done
+}
+
+// classifyAttempt inspects a single agent attempt and updates retry counters
+// and result fields, returning whether the loop should exit and, if not, the
+// retry type to use for the next iteration's backoff.
+func classifyAttempt(
+	attempt agentAttemptResult,
+	agentLogPath, workspaceDir string,
+	workspaceReadyAt time.Time,
+	quotaAttempts, infraAttempts, agentTimeoutAttempts *int,
+	result *agentExecutionResult,
+) attemptDecision {
+	// Non-recoverable auth errors first (no retries).
+	if detectAuthError(agentLogPath) {
+		result.failureClass = FailureClassAuth
+		return attemptDecision{done: true}
+	}
+
+	// Quota/provider errors.
+	if hasError, isRecoverable := detectQuotaError(agentLogPath); hasError {
+		return classifyQuota(isRecoverable, quotaAttempts, result)
+	}
+
+	// Infra failures (empty/near-empty agent log).
+	if isInfraFailure(agentLogPath, workspaceDir, workspaceReadyAt) {
+		return classifyInfra(infraAttempts, result)
+	}
+
+	// Wall-clock agent timeout with meaningful output — treated as an
+	// infra-class failure so it feeds the existing resumable-external-failure
+	// path (isResumableExternalFailure → skipped from scoring → surfaced in
+	// the printed resume command). A single cheap retry first in case the
+	// stall was a one-shot SSE hiccup.
+	if attempt.timedOut {
+		if *agentTimeoutAttempts < agentTimeoutMaxRetries {
+			*agentTimeoutAttempts++
+			result.agentTimeoutRetries = *agentTimeoutAttempts
+			return attemptDecision{retryType: "agent_timeout"}
+		}
+		result.infraFailure = true
+		result.failureClass = FailureClassInfra
+		return attemptDecision{done: true}
+	}
+
+	// Success path.
+	if result.failureClass == "" {
+		result.failureClass = FailureClassNone
+	}
+	return attemptDecision{done: true}
+}
+
+func classifyQuota(isRecoverable bool, quotaAttempts *int, result *agentExecutionResult) attemptDecision {
+	if !isRecoverable {
+		result.quotaExhausted = true
+		result.failureClass = FailureClassQuotaExhausted
+		return attemptDecision{done: true}
+	}
+	*quotaAttempts++
+	result.quotaRetries = *quotaAttempts
+	result.failureClass = FailureClassQuotaRecoverable
+	if *quotaAttempts >= quotaMaxRetries {
+		result.quotaExhausted = true
+		result.failureClass = FailureClassQuotaExhausted
+		return attemptDecision{done: true}
+	}
+	return attemptDecision{retryType: "quota"}
+}
+
+func classifyInfra(infraAttempts *int, result *agentExecutionResult) attemptDecision {
+	*infraAttempts++
+	result.infraRetries = *infraAttempts
+	if *infraAttempts >= infraMaxRetries {
+		result.infraFailure = true
+		result.failureClass = FailureClassInfra
+		return attemptDecision{done: true}
+	}
+	return attemptDecision{retryType: "infra"}
 }
 
 // agentAttemptResult holds the outcome of a single agent attempt.
@@ -2157,6 +2232,25 @@ func writeAgentTimeoutFooter(logFile *os.File, attempt int, timeout, runDuration
 
 // writeValidationLog persists validation output with a machine-readable footer.
 func writeValidationLog(path, rawOutput string, command []string, exitCode int, duration time.Duration, timedOut bool, runErr error) {
+	writeValidationLogWithStatus(path, rawOutput, command, exitCode, duration, timedOut, runErr, "")
+}
+
+// writeValidationLogWithStatus is the extended variant that emits an explicit
+// `status=` field in the footer. This lets summary consumers distinguish
+// states that share the same shape (exit_code=-1, duration=0, timed_out=false)
+// but have different semantics — notably "integrity_skipped" (agent modified
+// canonical task files, validation intentionally not run) vs a true
+// fast-failing validation. Empty status omits the field for backward
+// compatibility with existing log parsers.
+func writeValidationLogWithStatus(
+	path, rawOutput string,
+	command []string,
+	exitCode int,
+	duration time.Duration,
+	timedOut bool,
+	runErr error,
+	status string,
+) {
 	var sb strings.Builder
 	if rawOutput != "" {
 		sb.WriteString(rawOutput)
@@ -2166,14 +2260,26 @@ func writeValidationLog(path, rawOutput string, command []string, exitCode int, 
 		sb.WriteString("\n")
 	}
 
-	fmt.Fprintf(
-		&sb,
-		"HARNESS: validation command=%q exit_code=%d duration_seconds=%.3f timed_out=%t\n",
-		strings.Join(command, " "),
-		exitCode,
-		duration.Seconds(),
-		timedOut,
-	)
+	if status != "" {
+		fmt.Fprintf(
+			&sb,
+			"HARNESS: validation status=%q command=%q exit_code=%d duration_seconds=%.3f timed_out=%t\n",
+			status,
+			strings.Join(command, " "),
+			exitCode,
+			duration.Seconds(),
+			timedOut,
+		)
+	} else {
+		fmt.Fprintf(
+			&sb,
+			"HARNESS: validation command=%q exit_code=%d duration_seconds=%.3f timed_out=%t\n",
+			strings.Join(command, " "),
+			exitCode,
+			duration.Seconds(),
+			timedOut,
+		)
+	}
 	if runErr != nil {
 		fmt.Fprintf(&sb, "HARNESS: validation run_error=%q\n", runErr.Error())
 	}
