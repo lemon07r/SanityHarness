@@ -226,7 +226,7 @@ The TOML file supports defaults that apply to all runs, with per-run overrides.`
 				runDir := multiRunSubdir(umbrellaDir, spec, specIdx, rep, repeat)
 				summary, _, err := evalRunSingle(
 					interruptCtx, spec, runShared, allTasks, allTasks,
-					runDir, timestamp, r, false, nil, nil, nil, nil,
+					runDir, timestamp, r, false, nil, nil, nil, nil, nil,
 				)
 				rr := runResult{spec: spec, repeat: rep, summary: summary}
 				if err != nil {

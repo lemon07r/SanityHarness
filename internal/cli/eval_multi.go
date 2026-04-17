@@ -305,7 +305,8 @@ func resumeMultiRun(resumeDir string) error {
 		summary, _, runErr := evalRunSingle(
 			interruptCtx, spec, shared, allTasks, allTasks,
 			runDir, timestamp, r, resumeState.isResuming,
-			resumeState.previousResults, resumeState.completedTasks,
+			resumeState.previousResults, resumeState.previousExternalFailures,
+			resumeState.completedTasks,
 			resumeState.prevAttestation, resumeState.runCfg,
 		)
 		rr := runResult{spec: spec, repeat: item.Repeat, summary: summary, err: runErr}
@@ -321,11 +322,12 @@ func resumeMultiRun(resumeDir string) error {
 
 // interruptedResumeState holds the state needed to resume an interrupted single run.
 type interruptedResumeState struct {
-	isResuming      bool
-	previousResults []EvalResult
-	completedTasks  map[string]bool
-	prevAttestation *EvalAttestation
-	runCfg          *RunConfig
+	isResuming               bool
+	previousResults          []EvalResult
+	previousExternalFailures []ExternalFailure
+	completedTasks           map[string]bool
+	prevAttestation          *EvalAttestation
+	runCfg                   *RunConfig
 }
 
 // prepareInterruptedResume loads resume state for an interrupted multi-run item.
@@ -339,16 +341,19 @@ func prepareInterruptedResume(item MultiRunItem, runDir string) interruptedResum
 	}
 	completedTasks, _ := findCompletedTasks(runDir)
 	var previousResults []EvalResult
+	var previousExternalFailures []ExternalFailure
 	if prevSummary, _ := loadPreviousSummary(runDir); prevSummary != nil {
 		previousResults = prevSummary.Results
+		previousExternalFailures = prevSummary.ExternalFailures
 	}
 	prevAttestation, _ := loadPreviousAttestation(runDir)
 	return interruptedResumeState{
-		isResuming:      true,
-		previousResults: previousResults,
-		completedTasks:  completedTasks,
-		prevAttestation: prevAttestation,
-		runCfg:          runCfg,
+		isResuming:               true,
+		previousResults:          previousResults,
+		previousExternalFailures: previousExternalFailures,
+		completedTasks:           completedTasks,
+		prevAttestation:          prevAttestation,
+		runCfg:                   runCfg,
 	}
 }
 

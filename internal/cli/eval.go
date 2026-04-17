@@ -470,6 +470,7 @@ Examples:
 		// Track if we're resuming a previous run.
 		var isResuming bool
 		var previousResults []EvalResult
+		var previousExternalFailures []ExternalFailure
 		var completedTasks map[string]bool
 		var runCfg *RunConfig
 		var timestamp string
@@ -511,6 +512,7 @@ Examples:
 			}
 			if prevSummary != nil {
 				previousResults = prevSummary.Results
+				previousExternalFailures = prevSummary.ExternalFailures
 				timestamp = prevSummary.Timestamp
 			}
 
@@ -756,7 +758,7 @@ Examples:
 					runDir := multiRunSubdir(umbrellaDir, spec, specIdx, rep, evalRepeat)
 					summary, _, err := evalRunSingle(
 						interruptCtx, spec, shared, allTasks, allTasks,
-						runDir, timestamp, r, false, nil, nil, nil, nil,
+						runDir, timestamp, r, false, nil, nil, nil, nil, nil,
 					)
 					rr := runResult{spec: spec, repeat: rep, summary: summary}
 					if err != nil {
@@ -803,7 +805,7 @@ Examples:
 		_, _, err = evalRunSingle(
 			interruptCtx, spec, shared, allTasks, allTasks,
 			evalOutputDir, timestamp, r, isResuming,
-			previousResults, completedTasks, prevAttestation, runCfg,
+			previousResults, previousExternalFailures, completedTasks, prevAttestation, runCfg,
 		)
 		return err
 	},
@@ -822,6 +824,7 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	r *runner.Runner,
 	isResuming bool,
 	previousResults []EvalResult,
+	previousExternalFailures []ExternalFailure,
 	completedTasks map[string]bool,
 	prevAttestation *EvalAttestation,
 	runCfg *RunConfig,
@@ -900,7 +903,24 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 	results := make([]EvalResult, 0, len(tasksToRun))
 	passed, failed := 0, 0
 	var resumableFailedTasks []string // External failures excluded from results (resumable via --resume)
-	var externalFailures []ExternalFailure
+	// Seed externalFailures with previously-recorded external failures from an earlier
+	// resume cycle so they stay out of the scored denominator. Tasks that get re-run
+	// in this session are removed below before any new outcome is recorded.
+	externalFailures := make([]ExternalFailure, 0, len(previousExternalFailures))
+	externalFailures = append(externalFailures, previousExternalFailures...)
+	if isResuming && len(externalFailures) > 0 {
+		rerunSet := make(map[string]bool, len(tasksToRun))
+		for _, t := range tasksToRun {
+			rerunSet[t.ID()] = true
+		}
+		kept := externalFailures[:0]
+		for _, f := range externalFailures {
+			if !rerunSet[f.Task] {
+				kept = append(kept, f)
+			}
+		}
+		externalFailures = kept
+	}
 	recordExternalFailure := func(r EvalResult) {
 		externalFailures = append(externalFailures, ExternalFailure{
 			Task:          r.Task,
@@ -1130,16 +1150,27 @@ func evalRunSingle( //nolint:gocognit,gocyclo,maintidx
 		for _, r := range results {
 			newResultTasks[r.Task] = true
 		}
-		// Prepend previous results that aren't in the new results.
+		// Exclude any task that is currently tracked as an external failure
+		// (either carried over from a prior resume or recorded this session).
+		// Without this, a task previously stored in `results` under an earlier
+		// bug and now properly classified as infra/auth/quota would be
+		// double-counted — once as a scored failure and once as a skip.
+		externalFailureTasks := make(map[string]bool, len(externalFailures))
+		for _, f := range externalFailures {
+			externalFailureTasks[f.Task] = true
+		}
+		// Prepend previous results that aren't in the new results and aren't
+		// classified as external failures.
 		var merged []EvalResult
 		for _, r := range previousResults {
-			if !newResultTasks[r.Task] {
-				merged = append(merged, r)
-				if r.Passed {
-					passed++
-				} else {
-					failed++
-				}
+			if newResultTasks[r.Task] || externalFailureTasks[r.Task] {
+				continue
+			}
+			merged = append(merged, r)
+			if r.Passed {
+				passed++
+			} else {
+				failed++
 			}
 		}
 		results = append(merged, results...)
