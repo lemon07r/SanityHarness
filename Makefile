@@ -33,6 +33,9 @@ VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || ech
 COMMIT_HASH   := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME    := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
+# Container engine for image targets: Docker when present, otherwise Podman
+CONTAINER_ENGINE ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
+
 # Go build flags
 LDFLAGS := -s -w \
 	-X '$(CLI_PKG).Version=$(VERSION)' \
@@ -314,29 +317,29 @@ tools-check: ## Check if required tools are installed
 	@printf '  golangci-lint: '; command -v golangci-lint >/dev/null 2>&1 && printf '$(GREEN)installed$(NO_COLOR)\n' || printf '$(YELLOW)missing$(NO_COLOR)\n'
 	@printf '  govulncheck:   '; command -v govulncheck >/dev/null 2>&1 && printf '$(GREEN)installed$(NO_COLOR)\n' || printf '$(YELLOW)missing$(NO_COLOR)\n'
 
-##@ Docker
+##@ Containers
 
 .PHONY: docker-build
-docker-build: ## Build all Docker images for task execution
-	@printf '$(INFO) Building Docker images...\\n'
-	@docker build -f containers/Dockerfile-go -t ghcr.io/lemon07r/sanity-go:latest .
-	@docker build -f containers/Dockerfile-rust -t ghcr.io/lemon07r/sanity-rust:latest .
-	@docker build -f containers/Dockerfile-ts -t ghcr.io/lemon07r/sanity-ts:latest .
-	@docker build -f containers/Dockerfile-kotlin -t ghcr.io/lemon07r/sanity-kotlin:latest .
-	@docker build -f containers/Dockerfile-dart -t ghcr.io/lemon07r/sanity-dart:latest .
-	@docker build -f containers/Dockerfile-zig -t ghcr.io/lemon07r/sanity-zig:latest .
-	@printf '$(OK) Docker images built\\n'
+docker-build: ## Build all container images for task execution (Docker or Podman)
+	@printf '$(INFO) Building container images with $(CONTAINER_ENGINE)...\\n'
+	@$(CONTAINER_ENGINE) build -f containers/Dockerfile-go -t ghcr.io/lemon07r/sanity-go:latest .
+	@$(CONTAINER_ENGINE) build -f containers/Dockerfile-rust -t ghcr.io/lemon07r/sanity-rust:latest .
+	@$(CONTAINER_ENGINE) build -f containers/Dockerfile-ts -t ghcr.io/lemon07r/sanity-ts:latest .
+	@$(CONTAINER_ENGINE) build -f containers/Dockerfile-kotlin -t ghcr.io/lemon07r/sanity-kotlin:latest .
+	@$(CONTAINER_ENGINE) build -f containers/Dockerfile-dart -t ghcr.io/lemon07r/sanity-dart:latest .
+	@$(CONTAINER_ENGINE) build -f containers/Dockerfile-zig -t ghcr.io/lemon07r/sanity-zig:latest .
+	@printf '$(OK) Container images built\\n'
 
 .PHONY: docker-push
-docker-push: ## Push Docker images to GHCR
-	@printf '$(INFO) Pushing Docker images to GHCR...\\n'
-	@docker push ghcr.io/lemon07r/sanity-go:latest
-	@docker push ghcr.io/lemon07r/sanity-rust:latest
-	@docker push ghcr.io/lemon07r/sanity-ts:latest
-	@docker push ghcr.io/lemon07r/sanity-kotlin:latest
-	@docker push ghcr.io/lemon07r/sanity-dart:latest
-	@docker push ghcr.io/lemon07r/sanity-zig:latest
-	@printf '$(OK) Docker images pushed\\n'
+docker-push: ## Push container images to GHCR (Docker or Podman)
+	@printf '$(INFO) Pushing container images to GHCR with $(CONTAINER_ENGINE)...\\n'
+	@$(CONTAINER_ENGINE) push ghcr.io/lemon07r/sanity-go:latest
+	@$(CONTAINER_ENGINE) push ghcr.io/lemon07r/sanity-rust:latest
+	@$(CONTAINER_ENGINE) push ghcr.io/lemon07r/sanity-ts:latest
+	@$(CONTAINER_ENGINE) push ghcr.io/lemon07r/sanity-kotlin:latest
+	@$(CONTAINER_ENGINE) push ghcr.io/lemon07r/sanity-dart:latest
+	@$(CONTAINER_ENGINE) push ghcr.io/lemon07r/sanity-zig:latest
+	@printf '$(OK) Container images pushed\\n'
 
 ##@ CI/CD
 
