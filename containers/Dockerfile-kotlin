@@ -1,6 +1,15 @@
-FROM eclipse-temurin:21-jdk-alpine
+ARG TARGETARCH
 
+# Gradle's native file-watching library crashes the daemon on musl/aarch64
+# (gradle/gradle#17099), so arm64 uses Temurin's glibc image. amd64 keeps Alpine.
+FROM docker.io/library/eclipse-temurin:21-jdk-alpine AS base-amd64
 RUN apk add --no-cache bash
+
+FROM docker.io/library/eclipse-temurin:21-jdk AS base-arm64
+RUN apt-get update && apt-get install -y --no-install-recommends unzip wget \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base-${TARGETARCH}
 
 # Install Gradle
 ENV GRADLE_VERSION=8.5
