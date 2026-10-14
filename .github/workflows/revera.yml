@@ -1,0 +1,19 @@
+name: revera
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: revera-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  revera:
+    uses: lemon07r/revera-workflows/.github/workflows/revera.yml@main
+    secrets: inherit
